@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>THE-Staves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Music&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f3ec; --paper: #fffdf8; --ink: #1d1b18; --muted: #7a746a;
+    --line: #2b2925; --accent: #c2410c; --accent-soft: #fde8dc; --border: #e4ddd0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16150f; --paper: #211f19; --ink: #f1ece2; --muted: #a59e90;
+      --line: #d9d3c6; --accent: #fb923c; --accent-soft: #3a2616; --border: #37332a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
+  h1 { margin: 0; font-weight: 800; letter-spacing: -0.02em; font-size: 26px; }
+  h1 span { color: var(--accent); }
+  header small { color: var(--muted); }
+
+  .toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+    padding: 10px 24px; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border); }
+  .group { display: flex; gap: 4px; align-items: center; }
+  .group label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 4px; }
+  .tool { width: 44px; height: 48px; border: 1px solid var(--border); background: var(--paper); color: var(--ink);
+    border-radius: 8px; cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .tool svg { width: 30px; height: 40px; overflow: visible; }
+  .tool[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent) inset; }
+  .tool:hover { border-color: var(--accent); }
+  .btn { height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--paper);
+    color: var(--ink); font: 600 14px Inter, sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+  .spacer { flex: 1; }
+
+  main { padding: 20px 24px 60px; max-width: 1200px; margin: 0 auto; }
+  .stave-wrap { position: relative; background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
+    margin-bottom: 16px; padding: 4px 8px; }
+  .stave-wrap .num { position: absolute; top: 8px; left: 12px; font-size: 11px; color: var(--muted); }
+  .stave-wrap .remove { position: absolute; top: 6px; right: 8px; border: none; background: none; color: var(--muted);
+    cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; }
+  .stave-wrap .remove:hover { color: #fff; background: #b91c1c; }
+  svg.stave { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: manipulation; }
+  svg.stave.erasing { cursor: not-allowed; }
+  svg.stave .item.hot { fill: var(--accent); stroke: var(--accent); }
+  .add-stave { width: 100%; height: 56px; border: 2px dashed var(--border); border-radius: 12px; background: none;
+    color: var(--muted); font: 600 15px Inter, sans-serif; cursor: pointer; }
+  .add-stave:hover { border-color: var(--accent); color: var(--accent); }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; }
+  kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--paper); }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+    padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; }
+  .toast button { background: none; border: none; color: var(--accent); font-weight: 700; cursor: pointer; font-size: 14px; }
+  @media (max-width: 600px) { header, .toolbar, main { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header><h1>THE-<span>Staves</span></h1><small>music notation plotter</small></header>
+
+<div class="toolbar">
+  <div class="group" id="notes"><label>Notes</label></div>
+  <div class="group" id="rests"><label>Rests</label></div>
+  <div class="group"><label>Edit</label>
+    <button class="tool" id="eraser" title="Eraser (E) – click a symbol to remove it" aria-pressed="false">
+      <svg viewBox="0 0 30 40"><path d="M6 26 L18 10 L26 16 L14 32 Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 21 L20 28" stroke="currentColor" stroke-width="2"/></svg>
+    </button>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn" id="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
+  <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
+  <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
+</div>
+
+<main>
+  <div id="staves"></div>
+  <button class="add-stave" id="addStave">+ Add stave</button>
+  <p class="hint">Pick a note or rest, then click on a stave to place it. Hover to preview pitch.
+    <kbd>1</kbd>–<kbd>5</kbd> notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rests · <kbd>E</kbd> eraser · right‑click removes · <kbd>⌘/Ctrl Z</kbd> undo</p>
+</main>
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="toastUndo">Undo</button></div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const W = 1000, H = 170, TOP = 55, GAP = 12, STEP = GAP / 2;  // 5 lines, F5 at step 0
+const MIN_STEP = -6, MAX_STEP = 14, X0 = 70;
+const DURS = [
+  { id: 'whole', name: 'Whole', flags: 0, filled: false, stem: false },
+  { id: 'half', name: 'Half', flags: 0, filled: false, stem: true },
+  { id: 'quarter', name: 'Quarter', flags: 0, filled: true, stem: true },
+  { id: 'eighth', name: 'Eighth', flags: 1, filled: true, stem: true },
+  { id: 'sixteenth', name: 'Sixteenth', flags: 2, filled: true, stem: true },
+];
+const REST_GLYPH = { whole: '\u{1D13B}', half: '\u{1D13C}', quarter: '\u{1D13D}', eighth: '\u{1D13E}', sixteenth: '\u{1D13F}' };
+
+let state = load() || { staves: [{ items: [] }] };
+let past = [], future = [];
+let tool = { kind: 'note', dur: 'quarter' };
+
+function load() { try { return JSON.parse(localStorage.getItem('the-staves')); } catch { return null; } }
+function save() { try { localStorage.setItem('the-staves', JSON.stringify(state)); } catch {} }
+
+function commit(mutate) {
+  past.push(JSON.stringify(state));
+  if (past.length > 200) past.shift();
+  future = [];
+  mutate();
+  render();
+}
+function undo() { if (!past.length) return; future.push(JSON.stringify(state)); state = JSON.parse(past.pop()); render(); }
+function redo() { if (!future.length) return; past.push(JSON.stringify(state)); state = JSON.parse(future.pop()); render(); }
+
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const yOf = s => TOP + s * STEP;
+
+// Draws a note or rest into group g at (x, step)
+function drawSymbol(g, kind, durId, x, s) {
+  const d = DURS.find(d => d.id === durId);
+  if (kind === 'rest') {
+    const t = el('text', { x, y: yOf(4), 'font-family': 'Noto Music', 'font-size': 48, 'text-anchor': 'middle', fill: 'currentColor' }, g);
+    t.textContent = REST_GLYPH[durId];
+    return;
+  }
+  const y = yOf(s);
+  // ledger lines
+  for (let l = -2; l >= s; l -= 2) el('line', { x1: x - 13, x2: x + 13, y1: yOf(l), y2: yOf(l), stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+  for (let l = 10; l <= s; l += 2) el('line', { x1: x - 13, x2: x + 13, y1: yOf(l), y2: yOf(l), stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+  el('ellipse', { cx: x, cy: y, rx: 7.2, ry: 5.2, transform: `rotate(-20 ${x} ${y})`,
+    fill: d.filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': d.filled ? 0 : 2.2 }, g);
+  if (!d.stem) return;
+  const up = s >= 4, sx = up ? x + 6.4 : x - 6.4, sy2 = up ? y - 36 : y + 36;
+  el('line', { x1: sx, x2: sx, y1: y + (up ? -1 : 1), y2: sy2, stroke: 'currentColor', 'stroke-width': 1.6 }, g);
+  for (let f = 0; f < d.flags; f++) {
+    const fy = sy2 + (up ? f * 8 : -f * 8), dir = up ? 1 : -1;
+    el('path', { d: `M${sx} ${fy} c 2 ${dir * 8}, 12 ${dir * 10}, 8 ${dir * 24} c 2 ${dir * -10}, -4 ${dir * -14}, -8 ${dir * -16}`,
+      fill: 'currentColor', stroke: 'currentColor', 'stroke-width': 1 }, g);
+  }
+}
+
+function render() {
+  save();
+  const host = document.getElementById('staves');
+  host.innerHTML = '';
+  state.staves.forEach((stave, si) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'stave-wrap';
+    wrap.innerHTML = `<span class="num">${si + 1}</span>`;
+    if (state.staves.length > 1) {
+      const rm = document.createElement('button');
+      rm.className = 'remove'; rm.title = 'Remove this stave'; rm.textContent = '×';
+      rm.onclick = () => commit(() => state.staves.splice(si, 1));
+      wrap.appendChild(rm);
+    }
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
+    svg.style.color = 'var(--line)';
+    for (let i = 0; i < 5; i++) el('line', { x1: 10, x2: W - 10, y1: yOf(i * 2), y2: yOf(i * 2), stroke: 'currentColor', 'stroke-width': 1.2 }, svg);
+    el('line', { x1: 10, x2: 10, y1: yOf(0), y2: yOf(8), stroke: 'currentColor', 'stroke-width': 1.5 }, svg);
+    el('line', { x1: W - 10, x2: W - 10, y1: yOf(0), y2: yOf(8), stroke: 'currentColor', 'stroke-width': 3 }, svg);
+    const clef = el('text', { x: 18, y: yOf(6), 'font-family': 'Noto Music', 'font-size': 48, fill: 'currentColor' }, svg);
+    clef.textContent = '\u{1D11E}';
+
+    stave.items.forEach((it, ii) => {
+      const g = el('g', { class: 'item' }, svg);
+      drawSymbol(g, it.kind, it.dur, it.x, it.s);
+      // generous invisible hit area for erasing
+      el('rect', { x: it.x - 14, y: yOf(Math.min(it.s, 0)) - 40, width: 28, height: 140, fill: 'transparent' }, g);
+      g.addEventListener('mouseenter', () => tool.kind === 'erase' && g.classList.add('hot'));
+      g.addEventListener('mouseleave', () => g.classList.remove('hot'));
+      const remove = e => { e.preventDefault(); e.stopPropagation(); commit(() => stave.items.splice(ii, 1)); };
+      g.addEventListener('contextmenu', remove);
+      g.addEventListener('click', e => tool.kind === 'erase' && remove(e));
+    });
+
+    const ghost = el('g', { opacity: .35, 'pointer-events': 'none' }, svg);
+    const pos = e => {
+      const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
+      const q = p.matrixTransform(svg.getScreenCTM().inverse());
+      const s = Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round((q.y - TOP) / STEP)));
+      return { x: Math.round(Math.max(X0, Math.min(W - 24, q.x))), s };
+    };
+    svg.addEventListener('mousemove', e => {
+      ghost.innerHTML = '';
+      if (tool.kind === 'erase' || e.target.closest('.item')) return;
+      const { x, s } = pos(e);
+      drawSymbol(ghost, tool.kind, tool.dur, x, s);
+    });
+    svg.addEventListener('mouseleave', () => ghost.innerHTML = '');
+    svg.addEventListener('click', e => {
+      if (tool.kind === 'erase') return;
+      const { x, s } = pos(e);
+      commit(() => stave.items.push({ kind: tool.kind, dur: tool.dur, x, s: tool.kind === 'rest' ? 4 : s }));
+    });
+    wrap.appendChild(svg);
+    host.appendChild(wrap);
+  });
+  document.getElementById('undo').disabled = !past.length;
+  document.getElementById('redo').disabled = !future.length;
+  document.getElementById('clear').disabled = state.staves.every(s => !s.items.length) && state.staves.length === 1;
+}
+
+// Palette
+function buildPalette() {
+  const make = (kind, d, i) => {
+    const b = document.createElement('button');
+    b.className = 'tool'; b.dataset.kind = kind; b.dataset.dur = d.id;
+    b.title = `${d.name} ${kind} (${kind === 'rest' ? 'Shift+' : ''}${i + 1})`;
+    const svg = el('svg', { viewBox: kind === 'rest' ? '-15 52 30 40' : '-15 38 30 52' });
+    drawSymbol(svg, kind, d.id, 0, 4);
+    b.appendChild(svg);
+    b.onclick = () => setTool({ kind, dur: d.id });
+    document.getElementById(kind === 'rest' ? 'rests' : 'notes').appendChild(b);
+  };
+  DURS.forEach((d, i) => make('note', d, i));
+  DURS.forEach((d, i) => make('rest', d, i));
+}
+function setTool(t) {
+  tool = t;
+  document.querySelectorAll('.tool').forEach(b => {
+    const on = b.id === 'eraser' ? t.kind === 'erase' : b.dataset.kind === t.kind && b.dataset.dur === t.dur;
+    b.setAttribute('aria-pressed', on);
+  });
+  document.querySelectorAll('svg.stave').forEach(s => s.classList.toggle('erasing', t.kind === 'erase'));
+}
+
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  document.getElementById('toastMsg').textContent = msg;
+  t.style.display = 'flex';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = 'none', 5000);
+}
+
+document.getElementById('eraser').onclick = () => setTool(tool.kind === 'erase' ? { kind: 'note', dur: 'quarter' } : { kind: 'erase' });
+document.getElementById('undo').onclick = undo;
+document.getElementById('redo').onclick = redo;
+document.getElementById('clear').onclick = () => { commit(() => state = { staves: [{ items: [] }] }); toast('All staves cleared.'); };
+document.getElementById('toastUndo').onclick = () => { undo(); document.getElementById('toast').style.display = 'none'; };
+document.getElementById('addStave').onclick = () => {
+  commit(() => state.staves.push({ items: [] }));
+  window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+};
+document.addEventListener('keydown', e => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (mod) return;
+  const n = parseInt(e.code.replace('Digit', ''), 10);
+  if (n >= 1 && n <= 5) setTool({ kind: e.shiftKey ? 'rest' : 'note', dur: DURS[n - 1].id });
+  if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
+});
+
+buildPalette();
+setTool(tool);
+render();
+document.fonts.ready.then(render);
+</script>
+</body>
+</html>
