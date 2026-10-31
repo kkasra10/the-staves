@@ -2,18 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>THE-Staves</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Music&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #f6f3ec; --paper: #fffdf8; --ink: #1d1b18; --muted: #7a746a;
-    --line: #2b2925; --accent: #c2410c; --accent-soft: #fde8dc; --border: #e4ddd0;
+    --line: #2b2925; --accent: #c2410c; --accent-soft: #fde8dc; --border: #e4ddd0; --over: rgba(220, 38, 38, .10);
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #16150f; --paper: #211f19; --ink: #f1ece2; --muted: #a59e90;
-      --line: #d9d3c6; --accent: #fb923c; --accent-soft: #3a2616; --border: #37332a; }
+      --line: #d9d3c6; --accent: #fb923c; --accent-soft: #3a2616; --border: #37332a; --over: rgba(248, 113, 113, .14); }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
@@ -25,39 +25,57 @@
   .toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
     padding: 10px 24px; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px);
     border-bottom: 1px solid var(--border); }
-  .group { display: flex; gap: 4px; align-items: center; }
+  .group { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
   .group label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 4px; }
   .tool { width: 44px; height: 48px; border: 1px solid var(--border); background: var(--paper); color: var(--ink);
-    border-radius: 8px; cursor: pointer; display: grid; place-items: center; padding: 0; }
+    border-radius: 8px; cursor: pointer; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
   .tool svg { width: 30px; height: 40px; overflow: visible; }
   .tool[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent) inset; }
   .tool:hover { border-color: var(--accent); }
   .btn { height: 40px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--paper);
-    color: var(--ink); font: 600 14px Inter, sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+    color: var(--ink); font: 600 14px Inter, sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .btn:hover:not(:disabled) { border-color: var(--accent); }
   .btn:disabled { opacity: .4; cursor: default; }
   .btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; color: #fff; }
   .spacer { flex: 1; }
+  #selGroup[hidden] { display: none; }
 
   main { padding: 20px 24px 60px; max-width: 1200px; margin: 0 auto; }
-  .stave-wrap { position: relative; background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
-    margin-bottom: 16px; padding: 4px 8px; }
-  .stave-wrap .num { position: absolute; top: 8px; left: 12px; font-size: 11px; color: var(--muted); }
-  .stave-wrap .remove { position: absolute; top: 6px; right: 8px; border: none; background: none; color: var(--muted);
-    cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; }
-  .stave-wrap .remove:hover { color: #fff; background: #b91c1c; }
-  svg.stave { width: 100%; height: auto; display: block; cursor: crosshair; touch-action: manipulation; }
+  .stave-wrap { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .stave-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .stave-head .num { font-weight: 700; color: var(--ink); min-width: 18px; }
+  .stave-head select { font: 13px Inter, sans-serif; color: var(--ink); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 6px; }
+  .stave-head .remove { margin-left: auto; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; padding: 4px 8px; border-radius: 6px; }
+  .stave-head .remove:hover { color: #fff; background: #b91c1c; }
+  .scroller { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  svg.stave { display: block; cursor: crosshair; touch-action: pan-x; user-select: none; -webkit-user-select: none; }
   svg.stave.erasing { cursor: not-allowed; }
-  svg.stave .item.hot { fill: var(--accent); stroke: var(--accent); }
+  svg.stave .item.hot, svg.stave .item.sel { color: var(--accent); }
   .add-stave { width: 100%; height: 56px; border: 2px dashed var(--border); border-radius: 12px; background: none;
     color: var(--muted); font: 600 15px Inter, sans-serif; cursor: pointer; }
   .add-stave:hover { border-color: var(--accent); color: var(--accent); }
-  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; }
+  .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; line-height: 1.8; }
   kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--paper); }
   .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
-    padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; }
+    padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; z-index: 10; }
   .toast button { background: none; border: none; color: var(--accent); font-weight: 700; cursor: pointer; font-size: 14px; }
-  @media (max-width: 600px) { header, .toolbar, main { padding-left: 16px; padding-right: 16px; } }
+
+  /* Phones: one compact, horizontally scrolling tool bar pinned to the bottom */
+  @media (max-width: 700px) {
+    header { padding: 14px 16px 4px; }
+    main { padding: 12px 16px 120px; }
+    .toolbar { position: fixed; top: auto; bottom: 0; left: 0; right: 0; flex-wrap: nowrap; overflow-x: auto; gap: 10px;
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); border-bottom: none; }
+    .group label, .spacer { display: none; }
+    .tool { width: 42px; height: 46px; }
+    .btn { height: 46px; padding: 0 12px; }
+    .hint .desk { display: none; }
+    .stave-head { position: relative; gap: 6px; padding: 6px 36px 6px 8px; }
+    .stave-head select { font-size: 12px; padding: 4px; }
+    .stave-head .remove { position: absolute; top: 4px; right: 2px; }
+    .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  }
 </style>
 </head>
 <body>
@@ -67,9 +85,14 @@
   <div class="group" id="notes"><label>Notes</label></div>
   <div class="group" id="rests"><label>Rests</label></div>
   <div class="group"><label>Edit</label>
-    <button class="tool" id="eraser" title="Eraser (E) – click a symbol to remove it" aria-pressed="false">
+    <button class="tool" id="eraser" title="Eraser (E) – tap a symbol to remove it" aria-pressed="false">
       <svg viewBox="0 0 30 40"><path d="M6 26 L18 10 L26 16 L14 32 Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 21 L20 28" stroke="currentColor" stroke-width="2"/></svg>
     </button>
+  </div>
+  <div class="group" id="selGroup" hidden><label>Selected</label>
+    <button class="btn" id="selUp" title="Raise pitch (↑)">▲</button>
+    <button class="btn" id="selDown" title="Lower pitch (↓)">▼</button>
+    <button class="btn" id="selDel" title="Delete (Backspace)">Delete</button>
   </div>
   <div class="spacer"></div>
   <button class="btn" id="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
@@ -80,30 +103,45 @@
 <main>
   <div id="staves"></div>
   <button class="add-stave" id="addStave">+ Add stave</button>
-  <p class="hint">Pick a note or rest, then click on a stave to place it. Hover to preview pitch.
-    <kbd>1</kbd>–<kbd>5</kbd> notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rests · <kbd>E</kbd> eraser · right‑click removes · <kbd>⌘/Ctrl Z</kbd> undo</p>
+  <p class="hint">Pick a note or rest, then tap a stave at the pitch you want – it's added after the last symbol (or after the selected one).
+    Bars fill up and split automatically from the time signature; overfull bars are tinted red. Tap a symbol to select it.
+    <span class="desk"><br><kbd>1</kbd>–<kbd>5</kbd> notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rests · <kbd>↑</kbd><kbd>↓</kbd> change pitch ·
+    <kbd>←</kbd><kbd>→</kbd> move selection · <kbd>⌫</kbd> delete · <kbd>E</kbd> eraser · <kbd>⌘/Ctrl Z</kbd> undo</span></p>
 </main>
 <div class="toast" id="toast"><span id="toastMsg"></span><button id="toastUndo">Undo</button></div>
 
 <script>
 const NS = 'http://www.w3.org/2000/svg';
-const W = 1000, H = 170, TOP = 55, GAP = 12, STEP = GAP / 2;  // 5 lines, F5 at step 0
-const MIN_STEP = -6, MAX_STEP = 14, X0 = 70;
+const H = 180, TOP = 62, GAP = 13, STEP = GAP / 2;  // staff step 0 = top line, 8 = bottom line
+const MIN_STEP = -6, MAX_STEP = 14;
 const DURS = [
-  { id: 'whole', name: 'Whole', flags: 0, filled: false, stem: false },
-  { id: 'half', name: 'Half', flags: 0, filled: false, stem: true },
-  { id: 'quarter', name: 'Quarter', flags: 0, filled: true, stem: true },
-  { id: 'eighth', name: 'Eighth', flags: 1, filled: true, stem: true },
-  { id: 'sixteenth', name: 'Sixteenth', flags: 2, filled: true, stem: true },
+  { id: 'whole', name: 'Whole', val: 1, adv: 84, flags: 0, filled: false, stem: false },
+  { id: 'half', name: 'Half', val: 1 / 2, adv: 60, flags: 0, filled: false, stem: true },
+  { id: 'quarter', name: 'Quarter', val: 1 / 4, adv: 44, flags: 0, filled: true, stem: true },
+  { id: 'eighth', name: 'Eighth', val: 1 / 8, adv: 36, flags: 1, filled: true, stem: true },
+  { id: 'sixteenth', name: 'Sixteenth', val: 1 / 16, adv: 30, flags: 2, filled: true, stem: true },
 ];
-const REST_GLYPH = { whole: '\u{1D13B}', half: '\u{1D13C}', quarter: '\u{1D13D}', eighth: '\u{1D13E}', sixteenth: '\u{1D13F}' };
+const durOf = id => DURS.find(d => d.id === id);
+// Diatonic pitch number: octave * 7 + letter index (C=0). top = pitch on the top staff line.
+const CLEFS = {
+  treble: { name: 'Treble', top: 38, glyph: '\u{1D11E}', at: 6 },
+  bass:   { name: 'Bass',   top: 26, glyph: '\u{1D122}', at: 7.6 },
+  alto:   { name: 'Alto',   top: 32, glyph: '\u{1D121}', at: 8.6 },
+  tenor:  { name: 'Tenor',  top: 30, glyph: '\u{1D121}', at: 6.6 },
+};
+const TIMES = ['4/4', '3/4', '2/4', '2/2', '6/8', '3/8', '9/8', '12/8', '5/4'];
+const ENDS = { single: 'Single bar', double: 'Double bar', final: 'Final bar', repeat: 'Right repeat' };
+const pitchName = p => 'CDEFGAB'[((p % 7) + 7) % 7] + Math.floor(p / 7);
 
-let state = load() || { staves: [{ items: [] }] };
+const newStave = from => ({ clef: from?.clef || 'treble', time: from?.time || '4/4', startRepeat: false, end: 'single', items: [] });
+let state = load() || { staves: [newStave()] };
 let past = [], future = [];
 let tool = { kind: 'note', dur: 'quarter' };
+let sel = null; // { si, ii }
+let reveal = null; // { si, x }: scroll this stave so x is visible after the next render
 
-function load() { try { return JSON.parse(localStorage.getItem('the-staves')); } catch { return null; } }
-function save() { try { localStorage.setItem('the-staves', JSON.stringify(state)); } catch {} }
+function load() { try { return JSON.parse(localStorage.getItem('the-staves-v2')); } catch { return null; } }
+function save() { try { localStorage.setItem('the-staves-v2', JSON.stringify(state)); } catch {} }
 
 function commit(mutate) {
   past.push(JSON.stringify(state));
@@ -112,8 +150,8 @@ function commit(mutate) {
   mutate();
   render();
 }
-function undo() { if (!past.length) return; future.push(JSON.stringify(state)); state = JSON.parse(past.pop()); render(); }
-function redo() { if (!future.length) return; past.push(JSON.stringify(state)); state = JSON.parse(future.pop()); render(); }
+function undo() { if (!past.length) return; future.push(JSON.stringify(state)); state = JSON.parse(past.pop()); sel = null; render(); }
+function redo() { if (!future.length) return; past.push(JSON.stringify(state)); state = JSON.parse(future.pop()); sel = null; render(); }
 
 function el(tag, attrs = {}, parent) {
   const e = document.createElementNS(NS, tag);
@@ -122,24 +160,37 @@ function el(tag, attrs = {}, parent) {
   return e;
 }
 const yOf = s => TOP + s * STEP;
+const line = (g, x1, y1, x2, y2, w = 1.3) => el('line', { x1, y1, x2, y2, stroke: 'currentColor', 'stroke-width': w }, g);
 
-// Draws a note or rest into group g at (x, step)
-function drawSymbol(g, kind, durId, x, s) {
-  const d = DURS.find(d => d.id === durId);
-  if (kind === 'rest') {
-    const t = el('text', { x, y: yOf(4), 'font-family': 'Noto Music', 'font-size': 48, 'text-anchor': 'middle', fill: 'currentColor' }, g);
-    t.textContent = REST_GLYPH[durId];
-    return;
+// Rests are drawn as shapes so their position on the staff is exact, independent of font metrics.
+function drawRest(g, durId, x) {
+  const f = { fill: 'currentColor' };
+  if (durId === 'whole') return el('rect', { x: x - 8, y: yOf(2), width: 16, height: STEP, ...f }, g);   // hangs from 4th line
+  if (durId === 'half') return el('rect', { x: x - 8, y: yOf(4) - STEP, width: 16, height: STEP, ...f }, g); // sits on middle line
+  if (durId === 'quarter') {
+    const y = yOf(4);
+    return el('path', { d: `M${x - 3} ${y - 19} L${x + 5} ${y - 8} Q${x - 1} ${y - 3} ${x + 5} ${y + 6}
+      Q${x - 6} ${y + 3} ${x + 1} ${y + 16} Q${x - 10} ${y + 9} ${x - 1} ${y + 6} L${x - 5} ${y - 2} Q${x + 1} ${y - 8} ${x - 3} ${y - 19} Z`, ...f }, g);
   }
-  const y = yOf(s);
-  // ledger lines
-  for (let l = -2; l >= s; l -= 2) el('line', { x1: x - 13, x2: x + 13, y1: yOf(l), y2: yOf(l), stroke: 'currentColor', 'stroke-width': 1.4 }, g);
-  for (let l = 10; l <= s; l += 2) el('line', { x1: x - 13, x2: x + 13, y1: yOf(l), y2: yOf(l), stroke: 'currentColor', 'stroke-width': 1.4 }, g);
-  el('ellipse', { cx: x, cy: y, rx: 7.2, ry: 5.2, transform: `rotate(-20 ${x} ${y})`,
+  const n = durId === 'eighth' ? 1 : 2;
+  const yTop = yOf(3) - 1;
+  line(g, x + 5, yTop, x - 2 - n, yTop + 14 + n * 9, 1.8);
+  for (let i = 0; i < n; i++) {
+    const cy = yTop + 2 + i * 9;
+    el('circle', { cx: x - 3 - i * 1.5, cy, r: 3.2, ...f }, g);
+    el('path', { d: `M${x - 3 - i * 1.5} ${cy + 2} Q${x + 1} ${cy + 3} ${x + 5 - i * 1.5} ${cy - 2}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+  }
+}
+
+function drawNote(g, durId, x, s) {
+  const d = durOf(durId), y = yOf(s);
+  for (let l = -2; l >= s; l -= 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
+  for (let l = 10; l <= s; l += 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
+  el('ellipse', { cx: x, cy: y, rx: 7.6, ry: 5.4, transform: `rotate(-20 ${x} ${y})`,
     fill: d.filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': d.filled ? 0 : 2.2 }, g);
   if (!d.stem) return;
-  const up = s >= 4, sx = up ? x + 6.4 : x - 6.4, sy2 = up ? y - 36 : y + 36;
-  el('line', { x1: sx, x2: sx, y1: y + (up ? -1 : 1), y2: sy2, stroke: 'currentColor', 'stroke-width': 1.6 }, g);
+  const up = s >= 4, sx = up ? x + 6.8 : x - 6.8, sy2 = up ? y - 38 : y + 38;
+  line(g, sx, y + (up ? -1 : 1), sx, sy2, 1.6);
   for (let f = 0; f < d.flags; f++) {
     const fy = sy2 + (up ? f * 8 : -f * 8), dir = up ? 1 : -1;
     el('path', { d: `M${sx} ${fy} c 2 ${dir * 8}, 12 ${dir * 10}, 8 ${dir * 24} c 2 ${dir * -10}, -4 ${dir * -14}, -8 ${dir * -16}`,
@@ -147,74 +198,199 @@ function drawSymbol(g, kind, durId, x, s) {
   }
 }
 
+const drawSymbol = (g, kind, durId, x, s) => kind === 'rest' ? drawRest(g, durId, x) : drawNote(g, durId, x, s);
+
+function repeatDots(g, x) {
+  el('circle', { cx: x, cy: yOf(3), r: 2.4, fill: 'currentColor' }, g);
+  el('circle', { cx: x, cy: yOf(5), r: 2.4, fill: 'currentColor' }, g);
+}
+
+// Lays out one stave: positions for each item, barlines, overfull bars, and the insertion point.
+function layout(stave, minWidth) {
+  const [n, d] = stave.time.split('/').map(Number), cap = n / d;
+  let x = 66;
+  const out = { items: [], bars: [], over: [], showTime: true };
+  const si = state.staves.indexOf(stave), prev = state.staves[si - 1];
+  out.showTime = !prev || prev.time !== stave.time;
+  if (out.showTime) x += 34;
+  if (stave.startRepeat) { out.startX = x; x += 20; }
+  x += 14;
+  let fill = 0, barStart = x - 14;
+  stave.items.forEach((it, ii) => {
+    const dur = durOf(it.dur);
+    out.items.push({ x: x + 6 });
+    x += dur.adv;
+    fill += dur.val;
+    const last = ii === stave.items.length - 1;
+    if (fill > cap + 1e-9) out.over.push([barStart, x]);
+    if (fill >= cap - 1e-9 && !last) {
+      out.bars.push(x + 2);
+      barStart = x + 2;
+      x += 18;
+      fill = 0;
+    }
+  });
+  out.tailX = x + 6;
+  out.width = Math.max(minWidth, x + 70);
+  return out;
+}
+
+function pitchToStep(clef, p) { return CLEFS[clef].top - p; }
+function stepToPitch(clef, s) { return CLEFS[clef].top - s; }
+
+function drawStave(svg, stave, si, L) {
+  const W = L.width;
+  svg.style.color = 'var(--line)';
+  for (const [a, b] of L.over) el('rect', { x: a, y: yOf(-2), width: b - a, height: yOf(10) - yOf(-2), fill: 'var(--over)' }, svg);
+  for (let i = 0; i < 5; i++) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
+  line(svg, 10, yOf(0), 10, yOf(8), 1.5);
+  const c = CLEFS[stave.clef];
+  const clef = el('text', { x: 20, y: yOf(c.at), 'font-family': 'Noto Music', 'font-size': 52, fill: 'currentColor' }, svg);
+  clef.textContent = c.glyph;
+  if (L.showTime) {
+    const [n, d] = stave.time.split('/');
+    for (const [txt, base] of [[n, 4], [d, 8]]) {
+      const t = el('text', { x: 82, y: yOf(base) - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30,
+        'text-anchor': 'middle', fill: 'currentColor' }, svg);
+      t.textContent = txt;
+    }
+  }
+  if (L.startX) {
+    el('rect', { x: L.startX, y: yOf(0), width: 4.5, height: yOf(8) - yOf(0), fill: 'currentColor' }, svg);
+    line(svg, L.startX + 8, yOf(0), L.startX + 8, yOf(8), 1.3);
+    repeatDots(svg, L.startX + 14);
+  }
+  for (const bx of L.bars) line(svg, bx, yOf(0), bx, yOf(8), 1.3);
+  const E = W - 10;
+  if (stave.end === 'single') line(svg, E, yOf(0), E, yOf(8), 1.5);
+  if (stave.end === 'double') { line(svg, E - 5, yOf(0), E - 5, yOf(8), 1.3); line(svg, E, yOf(0), E, yOf(8), 1.3); }
+  if (stave.end === 'final' || stave.end === 'repeat') {
+    line(svg, E - 8, yOf(0), E - 8, yOf(8), 1.3);
+    el('rect', { x: E - 4.5, y: yOf(0), width: 4.5, height: yOf(8) - yOf(0), fill: 'currentColor' }, svg);
+    if (stave.end === 'repeat') repeatDots(svg, E - 14);
+  }
+}
+
 function render() {
   save();
   const host = document.getElementById('staves');
+  const sx = [...host.querySelectorAll('.scroller')].map(s => s.scrollLeft);
   host.innerHTML = '';
+  const minWidth = Math.max(320, host.clientWidth - 2);
   state.staves.forEach((stave, si) => {
     const wrap = document.createElement('div');
     wrap.className = 'stave-wrap';
-    wrap.innerHTML = `<span class="num">${si + 1}</span>`;
+    const head = document.createElement('div');
+    head.className = 'stave-head';
+    const opts = (o, v) => Object.entries(o).map(([k, n]) => `<option value="${k}"${k === v ? ' selected' : ''}>${n}</option>`).join('');
+    head.innerHTML = `<span class="num">${si + 1}</span>
+      <select data-k="clef" aria-label="Clef">${opts(Object.fromEntries(Object.entries(CLEFS).map(([k, c]) => [k, c.name + ' clef'])), stave.clef)}</select>
+      <select data-k="time" aria-label="Time signature">${opts(Object.fromEntries(TIMES.map(t => [t, t])), stave.time)}</select>
+      <select data-k="startRepeat" aria-label="Start of line">${opts({ false: 'Plain start', true: 'Left repeat' }, String(stave.startRepeat))}</select>
+      <select data-k="end" aria-label="End of line">${opts(ENDS, stave.end)}</select>`;
+    head.querySelectorAll('select').forEach(s => s.onchange = () => commit(() => {
+      const k = s.dataset.k;
+      stave[k] = k === 'startRepeat' ? s.value === 'true' : s.value;
+    }));
     if (state.staves.length > 1) {
       const rm = document.createElement('button');
       rm.className = 'remove'; rm.title = 'Remove this stave'; rm.textContent = '×';
-      rm.onclick = () => commit(() => state.staves.splice(si, 1));
-      wrap.appendChild(rm);
+      rm.onclick = () => { sel = null; commit(() => state.staves.splice(si, 1)); };
+      head.appendChild(rm);
     }
-    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
-    svg.style.color = 'var(--line)';
-    for (let i = 0; i < 5; i++) el('line', { x1: 10, x2: W - 10, y1: yOf(i * 2), y2: yOf(i * 2), stroke: 'currentColor', 'stroke-width': 1.2 }, svg);
-    el('line', { x1: 10, x2: 10, y1: yOf(0), y2: yOf(8), stroke: 'currentColor', 'stroke-width': 1.5 }, svg);
-    el('line', { x1: W - 10, x2: W - 10, y1: yOf(0), y2: yOf(8), stroke: 'currentColor', 'stroke-width': 3 }, svg);
-    const clef = el('text', { x: 18, y: yOf(6), 'font-family': 'Noto Music', 'font-size': 48, fill: 'currentColor' }, svg);
-    clef.textContent = '\u{1D11E}';
+    wrap.appendChild(head);
+
+    const L = layout(stave, minWidth);
+    const svg = el('svg', { viewBox: `0 0 ${L.width} ${H}`, width: L.width, height: H, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
+    drawStave(svg, stave, si, L);
 
     stave.items.forEach((it, ii) => {
-      const g = el('g', { class: 'item' }, svg);
-      drawSymbol(g, it.kind, it.dur, it.x, it.s);
-      // generous invisible hit area for erasing
-      el('rect', { x: it.x - 14, y: yOf(Math.min(it.s, 0)) - 40, width: 28, height: 140, fill: 'transparent' }, g);
-      g.addEventListener('mouseenter', () => tool.kind === 'erase' && g.classList.add('hot'));
-      g.addEventListener('mouseleave', () => g.classList.remove('hot'));
-      const remove = e => { e.preventDefault(); e.stopPropagation(); commit(() => stave.items.splice(ii, 1)); };
-      g.addEventListener('contextmenu', remove);
-      g.addEventListener('click', e => tool.kind === 'erase' && remove(e));
+      const x = L.items[ii].x, s = it.kind === 'rest' ? 4 : pitchToStep(stave.clef, it.p);
+      const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : '') }, svg);
+      drawSymbol(g, it.kind, it.dur, x, s);
+      const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(s) - 8, yOf(s) + 8];
+      el('rect', { x: x - 13, y: ys[0], width: 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
+      g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
+      g.addEventListener('pointerleave', () => g.classList.remove('hot'));
+      g.addEventListener('contextmenu', e => { e.preventDefault(); removeItem(si, ii); });
+      g.addEventListener('click', e => {
+        e.stopPropagation();
+        if (tool.kind === 'erase') return removeItem(si, ii);
+        sel = sel && sel.si === si && sel.ii === ii ? null : { si, ii };
+        render();
+      });
     });
 
-    const ghost = el('g', { opacity: .35, 'pointer-events': 'none' }, svg);
-    const pos = e => {
-      const p = svg.createSVGPoint(); p.x = e.clientX; p.y = e.clientY;
-      const q = p.matrixTransform(svg.getScreenCTM().inverse());
-      const s = Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round((q.y - TOP) / STEP)));
-      return { x: Math.round(Math.max(X0, Math.min(W - 24, q.x))), s };
+    // insertion point: after the selected symbol on this stave, else at the end
+    const insAt = sel && sel.si === si ? sel.ii + 1 : stave.items.length;
+    const insX = insAt < stave.items.length ? (L.items[insAt - 1].x + L.items[insAt].x) / 2 : L.tailX;
+    const ghost = el('g', { opacity: .4, 'pointer-events': 'none' }, svg);
+    const stepAt = e => {
+      const r = svg.getBoundingClientRect();
+      return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round(((e.clientY - r.top) * (H / r.height) - TOP) / STEP)));
     };
-    svg.addEventListener('mousemove', e => {
+    const showGhost = e => {
       ghost.innerHTML = '';
       if (tool.kind === 'erase' || e.target.closest('.item')) return;
-      const { x, s } = pos(e);
-      drawSymbol(ghost, tool.kind, tool.dur, x, s);
+      const s = stepAt(e);
+      drawSymbol(ghost, tool.kind, tool.dur, insX, s);
+      if (tool.kind === 'note') {
+        const t = el('text', { x: insX + 16, y: yOf(s) + 4, 'font-size': 12, 'font-family': 'Inter, sans-serif', 'font-weight': 600, fill: 'var(--accent)' }, ghost);
+        t.textContent = pitchName(stepToPitch(stave.clef, s));
+      }
+    };
+    let down = false;
+    svg.addEventListener('pointerdown', e => { down = true; showGhost(e); });
+    svg.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' || down) showGhost(e); });
+    svg.addEventListener('pointerleave', () => { ghost.innerHTML = ''; down = false; });
+    svg.addEventListener('pointercancel', () => { ghost.innerHTML = ''; down = false; });
+    svg.addEventListener('pointerup', e => {
+      if (!down) return;
+      down = false;
+      if (tool.kind === 'erase' || e.target.closest('.item')) return;
+      const item = { kind: tool.kind, dur: tool.dur };
+      if (tool.kind === 'note') item.p = stepToPitch(stave.clef, stepAt(e));
+      reveal = { si, x: insX + durOf(tool.dur).adv + 40 };
+      commit(() => stave.items.splice(insAt, 0, item));
+      if (sel && sel.si === si) { sel = { si, ii: insAt }; render(); }
     });
-    svg.addEventListener('mouseleave', () => ghost.innerHTML = '');
-    svg.addEventListener('click', e => {
-      if (tool.kind === 'erase') return;
-      const { x, s } = pos(e);
-      commit(() => stave.items.push({ kind: tool.kind, dur: tool.dur, x, s: tool.kind === 'rest' ? 4 : s }));
-    });
-    wrap.appendChild(svg);
+
+    const scroller = document.createElement('div');
+    scroller.className = 'scroller';
+    scroller.appendChild(svg);
+    wrap.appendChild(scroller);
     host.appendChild(wrap);
+    scroller.scrollLeft = sx[si] || 0;
+    if (reveal && reveal.si === si && reveal.x > scroller.scrollLeft + scroller.clientWidth)
+      scroller.scrollLeft = reveal.x - scroller.clientWidth;
   });
+  reveal = null;
   document.getElementById('undo').disabled = !past.length;
   document.getElementById('redo').disabled = !future.length;
   document.getElementById('clear').disabled = state.staves.every(s => !s.items.length) && state.staves.length === 1;
+  document.getElementById('selGroup').hidden = !sel;
+  const selItem = sel && state.staves[sel.si]?.items[sel.ii];
+  document.getElementById('selUp').disabled = document.getElementById('selDown').disabled = !selItem || selItem.kind === 'rest';
 }
 
-// Palette
+function removeItem(si, ii) {
+  sel = null;
+  commit(() => state.staves[si].items.splice(ii, 1));
+}
+function nudge(delta) {
+  const it = sel && state.staves[sel.si]?.items[sel.ii];
+  if (!it || it.kind === 'rest') return;
+  const st = state.staves[sel.si], s = pitchToStep(st.clef, it.p) - delta;
+  if (s < MIN_STEP || s > MAX_STEP) return;
+  commit(() => it.p += delta);
+}
+
 function buildPalette() {
   const make = (kind, d, i) => {
     const b = document.createElement('button');
     b.className = 'tool'; b.dataset.kind = kind; b.dataset.dur = d.id;
     b.title = `${d.name} ${kind} (${kind === 'rest' ? 'Shift+' : ''}${i + 1})`;
-    const svg = el('svg', { viewBox: kind === 'rest' ? '-15 52 30 40' : '-15 38 30 52' });
+    const svg = el('svg', { viewBox: kind === 'rest' ? '-15 42 30 46' : '-15 40 30 52' });
     drawSymbol(svg, kind, d.id, 0, 4);
     b.appendChild(svg);
     b.onclick = () => setTool({ kind, dur: d.id });
@@ -244,21 +420,36 @@ function toast(msg) {
 document.getElementById('eraser').onclick = () => setTool(tool.kind === 'erase' ? { kind: 'note', dur: 'quarter' } : { kind: 'erase' });
 document.getElementById('undo').onclick = undo;
 document.getElementById('redo').onclick = redo;
-document.getElementById('clear').onclick = () => { commit(() => state = { staves: [{ items: [] }] }); toast('All staves cleared.'); };
+document.getElementById('selUp').onclick = () => nudge(1);
+document.getElementById('selDown').onclick = () => nudge(-1);
+document.getElementById('selDel').onclick = () => sel && removeItem(sel.si, sel.ii);
+document.getElementById('clear').onclick = () => { sel = null; commit(() => state = { staves: [newStave()] }); toast('All staves cleared.'); };
 document.getElementById('toastUndo').onclick = () => { undo(); document.getElementById('toast').style.display = 'none'; };
 document.getElementById('addStave').onclick = () => {
-  commit(() => state.staves.push({ items: [] }));
+  commit(() => state.staves.push(newStave(state.staves[state.staves.length - 1])));
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 };
 document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'SELECT') return;
   const mod = e.metaKey || e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod) return;
+  if (sel) {
+    const n = state.staves[sel.si].items.length;
+    if (e.key === 'ArrowUp') { e.preventDefault(); return nudge(1); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); return nudge(-1); }
+    if (e.key === 'ArrowLeft' && sel.ii > 0) { sel.ii--; return render(); }
+    if (e.key === 'ArrowRight' && sel.ii < n - 1) { sel.ii++; return render(); }
+    if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); return removeItem(sel.si, sel.ii); }
+    if (e.key === 'Escape') { sel = null; return render(); }
+  }
   const n = parseInt(e.code.replace('Digit', ''), 10);
   if (n >= 1 && n <= 5) setTool({ kind: e.shiftKey ? 'rest' : 'note', dur: DURS[n - 1].id });
   if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
 });
+let rw;
+addEventListener('resize', () => { clearTimeout(rw); rw = setTimeout(render, 120); });
 
 buildPalette();
 setTool(tool);
