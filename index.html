@@ -219,8 +219,9 @@
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
   <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
   <button class="btn" id="saveFile" title="Download this score as a file">⬇ Save</button>
+  <button class="btn" id="saveCode" title="Download this score as Staves code (.staves)">⬇ Code</button>
   <button class="btn" id="openFile" title="Open a score file">⬆ Open</button>
-  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  <input type="file" id="fileInput" accept=".json,.staves,.txt,application/json,text/plain" hidden>
 </div>
 
 <div class="layout">
@@ -1611,6 +1612,219 @@ function startPlayback() {
   if (cursor === t0) { stopPlayback(); return toast('Add some notes first.'); }
   player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 300));
 }
+// ---------- Staves code: Kasra's text notation for a score, one stave per line (codes follow the library, top to bottom) ----------
+const LANG = (() => {
+  const grp = name => SYMBOL_GROUPS.find(g => g.name.startsWith(name)).items;
+  const img = (group, i) => { const [n, u, iw, ih] = grp(group)[i]; return { u, n, iw, ih }; };
+  const named = (group, n) => img(group, grp(group).findIndex(it => it[0] === n));
+  const nat = (d, extra = {}) => ({ d, ...extra });
+  const text = (g, t) => ({ t, n: t, g });
+  const LINES = 'Lines', RHY = 'Rhythmic', ACC = 'Accidentals and key signatures: Common', MIC = 'Accidentals and key signatures: Micro';
+  const CLEF_VARS = { 'TR-8$': 'G8vb', 'TR+8$': 'G8va', 'TR-15$': 'G15mb', 'TR+15$': 'G15ma', 'BS-8$': 'F8vb', 'BS+8$': 'F8va', '2TR$': 'GG', 'NC||$': 'neutral', 'NCB$': 'neutralBox', 'PC-$': 'single' };
+  const BASE_CLEFS = { 'TR$': 'treble', 'AL$': 'alto', 'TN$': 'tenor', 'BS$': 'bass' };
+  const DUR_CODES = { N2: 'breve', N1: 'whole', 'N/2': 'half', 'N/4': 'quarter', 'N/8': 'eighth', 'N/16': 'sixteenth', 'N/32': 'thirtysecond',
+    'N/64': 'sixtyfourth', 'N/128': 'onetwentyeighth', 'N/256': 'twofiftysixth' };
+  const DIRS = { DC: 'D.C.', DCAF: 'D.C. al Fine', DCAC: 'D.C. al Coda', DS: 'D.S.', DSAF: 'D.S. al Fine', DSAC: 'D.S. al Coda', FINE: 'Fine', TCOD: 'To Coda' };
+  // written on a note, straight after its pitch (accidentals first)
+  const MODS = {
+    b: named(ACC, 'Flat'), '#': named(ACC, 'Sharp'), '§': named(ACC, 'Natural'), bb: named(ACC, 'Double flat'), x: named(ACC, 'Double sharp'),
+    'b1^': img(MIC, 0), 'b2^': img(MIC, 1), 'b1^b': img(MIC, 2), 'b2^b': img(MIC, 3), '#^': img(MIC, 4), '##^': img(MIC, 5),
+    '^.': named('Articulation', 'Staccato'), '^*': named('Articulation', 'Staccatissimo'), '^-': named('Articulation', 'Tenuto'),
+    '^(.': named('Articulation', 'Fermata or Pause'), '^>': named('Articulation', 'Accent'), '^^': named('Articulation', 'Marcato'),
+    '^TR': named('Ornaments', 'Trill'), '^~~': named('Ornaments', 'Upper mordent'), '^~|~': named('Ornaments', 'Lower mordent (inverted)'),
+    '^/\\/': img('Ornaments', 3), '^(\\/\\)': img('Ornaments', 4),
+    '^+': nat('bow', { var: 'lh' }), '^(.)': nat('bow', { var: 'snap' }), '^()': nat('bow', { var: 'harmonic' }), '^UB': nat('bow', { var: 'up' }),
+    '^DB': nat('bow', { var: 'down' }), '^CNSR': nat('bow', { var: 'con' }), '^SNSR': nat('bow', { var: 'senza' }),
+    _PED: nat('ped'), _RPED: nat('ped', { var: 'up' }),
+  };
+  const ACCS = new Set(['b', '#', '§', 'bb', 'x', 'b1^', 'b2^', 'b1^b', 'b2^b', '#^', '##^']);
+  // their own word, attached to the note that comes next
+  const SOLO = {
+    N8: named(RHY, 'Large (Maxima) / Octuple whole note'), R8: named(RHY, 'Large (Maxima) / Octuple whole rest'),
+    N4: named(RHY, 'Longa / Quadruple whole note'), R4: named(RHY, 'Longa / Quadruple whole rest'), NG: named(RHY, 'Ghost note'),
+    BM: named('Breaks', 'Breath mark'), CS: named('Breaks', 'Caesura'), ARP: nat('arpeggio'),
+    ...Object.fromEntries(['PPP', 'PP', 'P', 'MP', 'MF', 'F', 'FF', 'FFF', 'SFZ', 'FP', 'NIE'].map((c, i) => [c, img('Dynamics', i)])),
+    ...Object.fromEntries(['LH', 'RH', 'lH', 'rH', 'mg', 'md', 'ms', 'mi'].map((c, i) => [c, text('Hands (piano)', grp('Hands')[i][0])])),
+    ...Object.fromEntries(['Gt', 'Sw', 'Ch', 'Ped', 'So', 'Orch', 'Ant', 'Echo', 'Pos'].map((c, i) => [c, text('Organ manuals', grp('Organ')[i][0])])),
+  };
+  // between two notes: (note a) slur (note b); slur(3) reaches three notes on
+  const LINKS = { tie: 'tie', slur: 'slur', GLSW: 'gliss', GLSS: 'gliss', '<<<': 'cresc', '>>>': 'dim' };
+  const BARS = { '[||:': nat('repStart'), ':||]': nat('repEnd'), '%': nat('simile1'), '%%': nat('simile2'), SEG: nat('segno'), COD: nat('coda'), DIRC: nat('direct'),
+    '||': named(LINES, 'Double bar line'), '|]': named(LINES, 'Bold double bar line'), 'D|': named(LINES, 'Dotted bar line'),
+    ...Object.fromEntries(Object.entries(DIRS).map(([c, t]) => [c, nat('dir', { text: t })])) };
+  const ENDS_CODE = { '|': 'single', '||': 'double', '|]': 'final', ':||]': 'repeat' };
+  const OTT = { '8va': '8va', '8vb': '8vb', '15va': '15ma', '15vb': '15mb' };
+  const same = (a, b) => (a.d ? a.d === b.d && (a.var || '') === (b.var || '') && (a.text || '') === (b.text || '') : a.u ? a.u === b.u : a.t === b.t && a.g === b.g);
+  const codeOf = (table, m) => Object.keys(table).find(c => same(table[c], m));
+  const LETTERS = 'CDEFGAB';
+
+  // ----- text -> score -----
+  // modifiers after a pitch: try longer codes first and back off if the rest doesn't read (F4#^- is sharp + tenuto, F4#^ is demisharp)
+  const MOD_CODES = Object.keys(MODS).sort((a, b) => b.length - a.length);
+  function readMods(s) {
+    if (!s) return [];
+    for (const c of MOD_CODES) if (s.startsWith(c)) { const rest = readMods(s.slice(c.length)); if (rest) return [c, ...rest]; }
+    if (/^_[^_^&\s]/u.test(s)) { const ch = [...s][1], rest = readMods(s.slice(1 + ch.length)); if (rest) return ['_' + ch, ...rest]; }
+    return null;
+  }
+  function readPitches(s) {
+    const out = [];
+    for (const part of s.split('&')) {
+      const m = part.match(/^([A-G])(-?\d{1,2})(.*)$/u), mods = m && readMods(m[3]);
+      if (!mods) return null;
+      out.push({ p: +m[2] * 7 + LETTERS.indexOf(m[1]), mods });
+    }
+    return out;
+  }
+  function read(textIn) {
+    const staves = [];
+    let id = 0;
+    textIn.split(/\r?\n/).forEach((line, ln) => {
+      const toks = line.split('//')[0].trim().split(/\s+/).filter(Boolean);
+      if (!toks.length) return;
+      const st = { ...newStave(), items: [], marks: [] }, fail = t => { throw new Error(`line ${ln + 1}: "${t}" is not a code I know`); };
+      let dur = 'quarter', dot = false, pending = [], last = null;
+      const atBar = [], groups = [], open = [];
+      const attach = (sym, it) => st.marks.push({ ...sym, a: it.id });
+      const addItem = it => {
+        it.id = ++id; st.items.push(it); last = it;
+        pending.forEach(s => attach(s, it)); pending = [];
+        open.forEach(g => g.items.push(it));
+        return it;
+      };
+      const modsOn = (it, mods, pi) => mods.forEach(c => {
+        const sym = c[0] === '_' && !MODS[c] ? text('Fingering', c.slice(1)) : MODS[c];
+        st.marks.push({ ...sym, a: it.id, ...(ACCS.has(c) ? { pi } : {}) });
+      });
+      for (let t of toks) {
+        // groups may be glued on: 3*C4 D4 E4*
+        const opener = t.match(/^(\d{1,2}|8va|8vb|15va|15vb|PDLI|V\([^)]*\))\*(.*)$/u);
+        if (opener) { open.push({ kind: opener[1], items: [] }); if (!opener[2]) continue; t = opener[2]; }
+        let closes = 0;
+        while (t.endsWith('*') && t !== '*' && !readPitches(t) && !readPitches(t.replace(/^(N\d+|N\/\d+)\.?/u, ''))) { t = t.slice(0, -1); closes++; }
+        if (t === '*') { closes++; t = ''; }
+        if (t) {
+          let m;
+          if (st.items.length === 0 && (t === '{' || t === '[')) st.join = t === '{' ? 'brace' : 'bracket';
+          else if (own(BASE_CLEFS, t)) st.clef = BASE_CLEFS[t];
+          else if (own(CLEF_VARS, t)) { const v = CLEF_VARS[t]; st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push(nat('clef', { var: v })); st.clef = v[0] === 'F' ? 'bass' : 'treble'; st.lines = v === 'single' ? 1 : 5; }
+          else if (t === 'TAB$') { st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push({ ...named('Clefs', 'Tablature'), x: 40 }); }
+          else if ((m = t.match(/^K\(([+-]?\d)\)$/))) st.key = Math.max(-7, Math.min(7, +m[1]));
+          else if ((m = t.match(/^(\d{1,2})P(\d{1,2})$/))) { st.time = `${+m[1]}/${+m[2]}`; st.timeSym = null; }
+          else if (t === 'CT' || t === 'AB') { st.time = t === 'CT' ? '4/4' : '2/2'; st.timeSym = t === 'CT' ? 'C' : 'cut'; }
+          else if ((m = t.match(/^(N\d+|N\/\d+)(\.?)(.*)$/u)) && own(DUR_CODES, m[1])) {
+            dur = DUR_CODES[m[1]]; dot = !!m[2];
+            if (m[3]) { const ps = readPitches(m[3]) || fail(t); const it = addItem({ kind: 'note', dur, p: ps[0].p, ...(dot ? { dot } : {}), ...(ps.length > 1 ? { ch: ps.slice(1).map(q => q.p) } : {}) }); ps.forEach((q, i) => modsOn(it, q.mods, i)); }
+          }
+          else if ((m = t.match(/^(R\d|R\/\d+)(\.?)(.*)$/u)) && own(DUR_CODES, 'N' + m[1].slice(1))) {
+            const mods = readMods(m[3]) || fail(t), it = addItem({ kind: 'rest', dur: DUR_CODES['N' + m[1].slice(1)], ...(m[2] ? { dot: true } : {}) }); modsOn(it, mods, 0);
+          }
+          else if ((m = t.match(/^MMR\((\d{1,3})\)(.*)$/u))) { const mods = readMods(m[2]) || fail(t), it = addItem({ kind: 'rest', dur: 'measure', count: Math.max(1, +m[1]) }); modsOn(it, mods, 0); }
+          else if (readPitches(t)) {
+            const ps = readPitches(t), it = addItem({ kind: 'note', dur, p: ps[0].p, ...(dot ? { dot } : {}), ...(ps.length > 1 ? { ch: ps.slice(1).map(q => q.p) } : {}) });
+            ps.forEach((q, i) => modsOn(it, q.mods, i));
+          }
+          else if ((m = t.match(/^MM\((N\/[24])(\.?)\)=(\d{2,3})$/))) pending.push(nat('metronome', { unit: m[1] === 'N/2' ? 'half' : 'quarter', ...(m[2] ? { dotted: true } : {}), bpm: Math.max(10, Math.min(400, +m[3])) }));
+          else if (own(SOLO, t)) pending.push(SOLO[t]);
+          else if ((m = t.match(/^(tie|slur|GLSW|GLSS|<<<|>>>)(?:\((\d{1,2})\))?$/))) {
+            if (!last) fail(t);
+            st.marks.push({ ...nat(LINKS[m[1]], m[1] === 'GLSS' ? { var: 'straight' } : {}), a: last.id, ...(m[2] ? { span: +m[2] } : {}) });
+          }
+          else if (t === '|') { if (st.items.length) atBar.push({ pos: st.items.length, end: '|' }); }
+          else if (own(BARS, t) || (m = t.match(/^DIR\((.{1,40})\)$/u))) atBar.push({ pos: st.items.length, sym: m && !own(BARS, t) ? nat('dir', { text: m[1] }) : BARS[t], code: t });
+          else fail(t);
+        }
+        for (; closes > 0; closes--) { const g = open.pop() || fail('*'); if (g.items.length) groups.push(g); }
+      }
+      if (last) pending.forEach(s => attach(s, last));
+      staves.push(st);
+      // now the bars are known, place everything that sits on a barline
+      state.staves.push(st);
+      const L = layout(st, 0), barXs = [L.musicStart - 8, ...L.bars, L.width - 10], n = st.items.length;
+      state.staves.pop();
+      const barAt = pos => pos <= 0 ? 0 : pos >= n ? barXs.length - 1 : L.bars.filter(b => b < L.items[pos].x).length;
+      for (const b of atBar) {
+        const k = barAt(b.pos), atEnd = b.pos >= n && n > 0;
+        if (atEnd && own(ENDS_CODE, b.code || b.end)) { st.end = ENDS_CODE[b.code || b.end]; continue; }
+        if (b.end) continue;  // bars split by themselves
+        if (b.code === '[||:' && k === 0) { st.startRepeat = true; continue; }
+        if (b.sym.u) st.marks.push({ ...b.sym, a: null, x: barXs[k] });
+        else st.marks.push({ ...b.sym, ...(b.sym.d === 'direct' ? {} : { bar: k }) });
+      }
+      for (const g of groups) {
+        const first = g.items[0], span = g.items.length - 1, kind = g.kind;
+        if (/^\d+$/.test(kind)) st.marks.push(nat('tuplet', { num: Math.max(2, +kind), span, a: first.id }));
+        else if (own(OTT, kind)) st.marks.push(nat('ottava', { var: OTT[kind], span, a: first.id }));
+        else if (kind === 'PDLI') st.marks.push(nat('pedline', { span, a: first.id }));
+        else {
+          const label = kind.slice(2, -1), bar0 = barAt(st.items.indexOf(first)), bar1 = barAt(st.items.indexOf(g.items[span]));
+          const t = /^\d+$/.test(label) ? label + '.' : label;
+          st.marks.push(nat('volta', { text: t, bar: bar0, span: bar1 - bar0 + 1, ...(t === '2.' ? { closed: false } : {}) }));
+        }
+      }
+    });
+    if (!staves.length) throw new Error('There is no music in this file.');
+    return { staves };
+  }
+
+  // ----- score -> text -----
+  function write(score) {
+    return score.staves.map((st, si) => {
+      const out = [], n = st.items.length, L = layout(st, 0), barXs = [L.musicStart - 8, ...L.bars, L.width - 10];
+      const posOfBar = k => k >= barXs.length - 1 ? n : st.items.filter((_, i) => L.items[i].x < barXs[k]).length;
+      const at = () => Array.from({ length: n + 1 }, () => []);
+      const bars = at(), before = at(), mods = at(), links = at(), opens = at(), closes = at();
+      const ii = m => st.items.findIndex(it => it.id === m.a);
+      if (st.join) out.push(st.join === 'brace' ? '{' : '[');
+      const cm = st.marks.find(isClefMark);
+      out.push(cm && cm.d ? Object.keys(CLEF_VARS).find(c => CLEF_VARS[c] === cm.var) : cm && cm.n === 'Tablature' ? 'TAB$' : Object.keys(BASE_CLEFS).find(c => BASE_CLEFS[c] === st.clef));
+      if (st.key) out.push(`K(${st.key > 0 ? '+' : ''}${st.key})`);
+      out.push(st.timeSym === 'C' ? 'CT' : st.timeSym === 'cut' ? 'AB' : st.time.replace('/', 'P'));
+      if (st.startRepeat) bars[0].push('[||:');
+      for (const m of st.marks) {
+        if (m === cm) continue;
+        const i = ii(m);
+        let c;
+        if (m.d === 'volta') {
+          const a = posOfBar(m.bar ?? 0), b = posOfBar((m.bar ?? 0) + (m.span ?? 1)) - 1;
+          if (b >= a) { opens[a].push(`V(${(m.text || '1.').replace(/^(\d+)\.$/, '$1')})*`); closes[b].push('*'); }
+        } else if (m.d === 'dir' && !codeOf(BARS, m)) bars[posOfBar(m.bar ?? 0)].push(`DIR(${m.text})`);
+        else if (m.d === 'direct') bars[n].push('DIRC');
+        else if ((c = codeOf(BARS, m)) && !(m.u && i >= 0)) bars[m.u ? posOfBar(barXs.reduce((b, x, k) => Math.abs(x - (m.x ?? 0)) < Math.abs(barXs[b] - (m.x ?? 0)) ? k : b, 0)) : posOfBar(m.bar ?? 0)].push(c);
+        else if (i < 0) continue;  // not attached to anything
+        else if (m.d === 'tuplet' || m.d === 'ottava' || m.d === 'pedline') {
+          const b = Math.min(n - 1, i + (m.span ?? NATIVE[m.d].span));
+          opens[i].push((m.d === 'tuplet' ? m.num || 3 : m.d === 'pedline' ? 'PDLI' : Object.keys(OTT).find(k => OTT[k] === m.var)) + '*'); closes[b].push('*');
+        } else if (Object.values(LINKS).includes(m.d)) {
+          const w = m.d === 'gliss' ? (m.var === 'straight' ? 'GLSS' : 'GLSW') : Object.keys(LINKS).find(k => LINKS[k] === m.d);
+          links[i].push(w + (m.span != null && m.span !== NATIVE[m.d].span ? `(${m.span})` : ''));
+        } else if (m.d === 'metronome') before[i].push(`MM(N/${m.unit === 'half' ? 2 : 4}${m.dotted ? '.' : ''})=${m.bpm || 120}`);
+        else if ((c = codeOf(MODS, m))) mods[i].push({ c, pi: ACCS.has(c) ? m.pi || 0 : 0 });
+        else if ((c = codeOf(SOLO, m))) before[i].push(c);
+        else if (m.g === 'Fingering') mods[i].push({ c: '_' + m.t, pi: 0 });
+      }
+      let cur = null;
+      for (let i = 0; i <= n; i++) {
+        if (i > 0 && i < n && L.bars.some(b => b > L.items[i - 1].x && b < L.items[i].x)) out.push('|');
+        out.push(...bars[i]);
+        if (i === n) break;
+        const it = st.items[i], dc = Object.keys(DUR_CODES).find(k => DUR_CODES[k] === it.dur), on = c => mods[i].filter(x => x.pi === c).map(x => x.c);
+        out.push(...before[i], ...opens[i]);
+        if (it.dur === 'measure') out.push(`MMR(${it.count || 1})` + on(0).join(''));
+        else if (it.kind === 'rest') out.push('R' + dc.slice(1) + (it.dot ? '.' : '') + on(0).join(''));
+        else {
+          if (cur !== dc + !!it.dot) { out.push(dc + (it.dot ? '.' : '')); cur = dc + !!it.dot; }
+          const ms = mods[i].sort((a, b) => ACCS.has(b.c) - ACCS.has(a.c));
+          out.push(pitchesOf(it).map((p, k) => pitchName(p) + ms.filter(x => x.pi === k).map(x => x.c).join('')).join('&'));
+        }
+        out.push(...links[i], ...closes[i]);
+      }
+      if (n && !(st.end === 'repeat' && bars[n].includes(':||]'))) out.push(Object.keys(ENDS_CODE).find(c => ENDS_CODE[c] === st.end) || '|');
+      return out.join(' ');
+    }).join('\n') + '\n';
+  }
+  return { read, write };
+})();
 // ---------- Saving and opening scores. Each format turns the score into text and back; more formats can be added here ----------
 const FORMATS = {
   json: {
@@ -1618,6 +1832,7 @@ const FORMATS = {
     write: st => JSON.stringify({ app: 'THE-Staves', version: 1, staves: st.staves }, null, 2),
     read: text => JSON.parse(text),
   },
+  staves: { ext: 'staves', mime: 'text/plain', write: st => LANG.write(st), read: text => LANG.read(text) },
 };
 // Uploaded files are untrusted: keep only known fields with sensible values
 const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);  // ignores inherited names like __proto__
@@ -1678,10 +1893,11 @@ function saveScore(fmt = 'json') {
 function openScore(file) {
   if (!file) return;
   if (file.size > 5e6) return toast('That file is too big (over 5 MB).');
-  const fmt = Object.keys(FORMATS).find(k => file.name.toLowerCase().endsWith('.' + FORMATS[k].ext)) || 'json';
+  // unknown extensions: JSON if it reads as JSON, otherwise Staves code
+  const fmt = Object.keys(FORMATS).find(k => file.name.toLowerCase().endsWith('.' + FORMATS[k].ext));
   file.text().then(text => {
     let next;
-    try { next = cleanScore(FORMATS[fmt].read(text)); }
+    try { next = cleanScore(fmt ? FORMATS[fmt].read(text) : (() => { try { return JSON.parse(text); } catch { return LANG.read(text); } })()); }
     catch (err) { return toast(`Could not open ${file.name}: ${err.message}`); }
     sel = selMark = null;
     commit(() => state = next);
@@ -1689,6 +1905,7 @@ function openScore(file) {
   });
 }
 document.getElementById('saveFile').onclick = () => saveScore('json');
+document.getElementById('saveCode').onclick = () => saveScore('staves');
 document.getElementById('openFile').onclick = () => document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange = e => { openScore(e.target.files[0]); e.target.value = ''; };
 // dropping a file anywhere on the page opens it too
