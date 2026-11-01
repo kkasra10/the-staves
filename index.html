@@ -135,6 +135,17 @@
     .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
     aside.library { bottom: calc(63px + env(safe-area-inset-bottom)); height: 58vh; }
   }
+  /* Pinch-zoomed in: the tool bar (and the symbol sheet) stay on screen at normal size, pinned to the bottom of what you can see */
+  .toolbar.pinned { position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 20; flex-wrap: nowrap; overflow-x: auto;
+    border-top: 1px solid var(--border); border-bottom: none; transform-origin: 0 100%; padding: 8px 12px; }
+  .toolbar.pinned .group label, .toolbar.pinned .spacer { display: none; }
+  .toolbar.pinned #libToggle { display: inline-flex; }
+  aside.library.pinned { position: fixed; z-index: 19; left: 0; right: 0; top: auto; bottom: 66px; width: auto; height: 58vh;
+    border-left: none; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.2);
+    transform-origin: 0 100%; }
+  aside.library.pinned:not(.open) { display: none; }
+  aside.library.pinned .lib-head .close { display: block; }
+  body.zoomed main { padding-bottom: 140px; }
   /* Touch screens (phones, tablets, touch laptops): bigger targets, and 16px form text so iOS does not zoom in on focus */
   @media (pointer: coarse) {
     .tool { min-width: 44px; height: 50px; }
@@ -969,6 +980,24 @@ document.addEventListener('keydown', e => {
   if (e.key === '.') toggleDot();
   if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
 });
+// Keep the tool bar usable while pinch-zoomed: pin it (and an open symbol sheet) to the visible area and undo the zoom on it
+const vv = window.visualViewport;
+function pinToVisible() {
+  const zoomed = vv && vv.scale > 1.02;
+  document.body.classList.toggle('zoomed', !!zoomed);
+  const bar = document.querySelector('.toolbar'), lib = document.getElementById('library');
+  for (const [node, b] of [[bar, 0], [lib, 66]]) {
+    node.classList.toggle('pinned', !!zoomed);
+    if (!zoomed) { node.style.transform = ''; continue; }
+    const k = 1 / vv.scale, layoutH = document.documentElement.clientHeight;
+    const ty = vv.offsetTop + vv.height - layoutH + b - b * k;
+    node.style.transform = `translate(${vv.offsetLeft}px, ${ty}px) scale(${k})`;
+  }
+}
+let pinFrame;
+const schedulePin = () => { cancelAnimationFrame(pinFrame); pinFrame = requestAnimationFrame(pinToVisible); };
+if (vv) { vv.addEventListener('resize', schedulePin); vv.addEventListener('scroll', schedulePin); }
+addEventListener('scroll', schedulePin, { passive: true });
 let rw;
 addEventListener('resize', () => { clearTimeout(rw); rw = setTimeout(render, 120); });
 
