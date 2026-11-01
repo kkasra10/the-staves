@@ -27,7 +27,7 @@
     border-bottom: 1px solid var(--border); }
   .group { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
   .group label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 4px; }
-  .tool { width: 44px; height: 48px; border: 1px solid var(--border); background: var(--paper); color: var(--ink);
+  .tool { width: 38px; height: 48px; border: 1px solid var(--border); background: var(--paper); color: var(--ink);
     border-radius: 8px; cursor: pointer; display: grid; place-items: center; padding: 0; flex-shrink: 0; }
   .tool svg { width: 30px; height: 40px; overflow: visible; }
   .tool[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 2px var(--accent) inset; }
@@ -159,9 +159,9 @@
   <button class="add-stave" id="addStave">+ Add stave</button>
   <p class="hint">Pick a note or rest, then tap a stave at the pitch you want – it's added after the last symbol (or after the selected one).
     Bars fill up and split automatically from the time signature; overfull bars are tinted red. Tap a symbol to select it.
-    <span class="desk"><br><kbd>1</kbd>–<kbd>5</kbd> notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>5</kbd> rests · <kbd>↑</kbd><kbd>↓</kbd> change pitch ·
+    <span class="desk"><br><kbd>1</kbd>–<kbd>9</kbd> breve…128th notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> rests · <kbd>.</kbd> dot · <kbd>↑</kbd><kbd>↓</kbd> change pitch ·
     <kbd>←</kbd><kbd>→</kbd> move selection · <kbd>⌫</kbd> delete · <kbd>E</kbd> eraser · <kbd>⌘/Ctrl Z</kbd> undo</span>
-    <br>Library symbols are placed freely: pick one, tap where it goes, drag to move it, A−/A+ to resize.</p>
+    <br>Library symbols snap onto the nearest note or rest (and move with it) and onto staff lines and spaces: pick one, tap where it goes, drag to move, A−/A+ to resize.</p>
 </main>
 <aside class="library" id="library">
   <div class="lib-head">Symbols <span class="count" id="libCount"></span><button class="close" id="libClose" aria-label="Close">×</button></div>
@@ -177,13 +177,20 @@ const NS = 'http://www.w3.org/2000/svg';
 const H = 180, TOP = 62, GAP = 13, STEP = GAP / 2;  // staff step 0 = top line, 8 = bottom line
 const MIN_STEP = -6, MAX_STEP = 14;
 const DURS = [
+  { id: 'breve', name: 'Breve (double whole)', val: 2, adv: 104, flags: 0, filled: false, stem: false },
   { id: 'whole', name: 'Whole', val: 1, adv: 84, flags: 0, filled: false, stem: false },
   { id: 'half', name: 'Half', val: 1 / 2, adv: 60, flags: 0, filled: false, stem: true },
   { id: 'quarter', name: 'Quarter', val: 1 / 4, adv: 44, flags: 0, filled: true, stem: true },
   { id: 'eighth', name: 'Eighth', val: 1 / 8, adv: 36, flags: 1, filled: true, stem: true },
   { id: 'sixteenth', name: 'Sixteenth', val: 1 / 16, adv: 30, flags: 2, filled: true, stem: true },
+  { id: 'thirtysecond', name: 'Thirty-second', val: 1 / 32, adv: 28, flags: 3, filled: true, stem: true },
+  { id: 'sixtyfourth', name: 'Sixty-fourth', val: 1 / 64, adv: 28, flags: 4, filled: true, stem: true },
+  { id: 'onetwentyeighth', name: 'Hundred twenty-eighth', val: 1 / 128, adv: 28, flags: 5, filled: true, stem: true },
 ];
 const durOf = id => DURS.find(d => d.id === id);
+// A dot lengthens a note or rest by half
+const itemVal = it => durOf(it.dur).val * (it.dot ? 1.5 : 1);
+const itemAdv = it => Math.round(durOf(it.dur).adv * (it.dot ? 1.35 : 1));
 // Diatonic pitch number: octave * 7 + letter index (C=0). top = pitch on the top staff line.
 const CLEFS = {
   treble: { name: 'Treble', top: 38, glyph: '\u{1D11E}', at: 6 },
@@ -197,11 +204,11 @@ const pitchName = p => 'CDEFGAB'[((p % 7) + 7) % 7] + Math.floor(p / 7);
 
 // Library symbols scraped from https://en.wikipedia.org/wiki/List_of_musical_symbols: [name, path on upload.wikimedia.org, width, height]
 const SYMBOL_GROUPS = [{"name":"Lines","items":[["Staff/stave","commons/2/20/Music-staff.svg",200,100],["Ledger or leger lines","commons/5/53/Music-ledger-edited.png",200,148],["Bar line (or barline)","commons/4/4d/Music-bar.svg",200,100],["Double bar line","commons/0/0f/Music-doublebar.svg",200,100],["Bold double bar line","commons/d/d3/Music-endbar.svg",200,100],["Dotted bar line","commons/a/ad/Music-dottedbar.svg",200,100],["Brace","commons/2/2d/Accolade.svg",45,127],["Bracket","commons/5/53/Staff-bracket.jpg",70,226]]},
-{"name":"Clefs","items":[["G clef (Treble clef)","commons/d/d4/Music-GClef.svg",512,512],["C clef (Alto and Tenor clefs)","commons/0/02/Alto-clef.svg",425,261],["Tenor clef","commons/c/c3/Tenor-clef.svg",424,293],["F clef (Bass clef)","commons/2/23/Music-Fclef.svg",600,300],["Octave clef","commons/8/84/Octaveclef3.jpg",191,234],["Octave clef","commons/8/8b/Octaveclef4.jpg",191,234],["Octave clef","commons/2/23/Octaveclef.svg",61,75],["Octave clef","commons/4/42/Octaveclef5.jpg",191,234],["Octave clef","https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3a/Music-GClef2.jpg/250px-Music-GClef2.jpg",625,625],["Neutral clef","commons/9/95/Music-neutralclef.svg",600,300],["On a single-line staff","commons/6/65/Music-unpitchedclef.svg",600,300],["Tablature","commons/4/48/Music-TabClef.svg",200,200]]},
-{"name":"Rhythmic values of notes and rests","items":[["Large (Latin: Maxima) / Octuple whole note","commons/1/1f/Music-octwholenote.svg",600,300],["Large (Latin: Maxima) / Octuple whole note","commons/a/a4/Maxima_rest.svg",36,29],["Longa / Quadruple whole note","commons/f/fc/Music-quadwholenote.svg",600,300],["Longa / Quadruple whole note","commons/4/4c/Music-quadwholerest.svg",600,299],["Breve / Double whole note","commons/d/dc/Music-doublewholenote.svg",600,299],["Breve / Double whole note","commons/1/12/Music-doublewholerest.svg",600,300],["Semibreve / Whole note","commons/a/a0/Music-wholenote.svg",600,299],["Semibreve / Whole note","commons/8/8c/Music-wholerest.svg",200,148],["Minim / Half note","commons/c/c1/Music-halfnote.svg",199,103],["Minim / Half note","commons/e/ec/Music-halfrest.svg",891,659],["Crotchet / Quarter note","commons/f/fb/Music-quarternote.svg",200,200],["Crotchet / Quarter note","commons/8/8c/Crochet2.svg",199,100],["Crotchet / Quarter note","commons/6/66/Music-quarterrest.svg",199,100],["Quaver / Eighth note","commons/5/5b/Music-eighthnote.svg",200,200],["Quaver / Eighth note","commons/7/7c/Music-eighthrest.svg",199,103],["Semiquaver / Sixteenth note","commons/5/57/Music-sixteenthnote.svg",200,200],["Semiquaver / Sixteenth note","commons/4/4d/Music-sixteenthrest.svg",199,103],["Demisemiquaver / Thirty-second note","commons/b/b1/Music-thirtysecondnote.svg",200,200],["Demisemiquaver / Thirty-second note","commons/7/75/Music-thirtysecondrest.svg",199,103],["Hemidemisemiquaver / Sixty-fourth note","commons/b/b0/Sixtyfourth-note.svg",599,398],["Hemidemisemiquaver / Sixty-fourth note","commons/9/92/Music-sixtyfourthrest.svg",199,130],["Semihemidemisemiquaver / Quasihemidemisemiquaver / Hundred twenty-eighth note","commons/a/ab/Music-hundredtwentyeighthnote.svg",599,450],["Semihemidemisemiquaver / Quasihemidemisemiquaver / Hundred twenty-eighth note","commons/e/e1/Music-hundredtwentyeighthrest.svg",200,200],["Demisemihemidemisemiquaver&nbsp;/ Two hundred fifty-sixth note","commons/7/7f/Semigarrapatea.svg",200,200],["Demisemihemidemisemiquaver&nbsp;/ Two hundred fifty-sixth note","commons/3/3c/Silencio_de_semigarrapatea.svg",200,200],["Demisemihemidemisemiquaver&nbsp;/ Two hundred fifty-sixth note","commons/3/34/Music-beam.svg",200,200],["Demisemihemidemisemiquaver&nbsp;/ Two hundred fifty-sixth note","https://thumb.wikimedia.org/wikipedia/commons/thumb/6/63/Four_sixteenth_notes.png/250px-Four_sixteenth_notes.png",329,167],["Dotted note","commons/6/6c/Music-dotnote.svg",200,200],["Dotted note","https://thumb.wikimedia.org/wikipedia/commons/thumb/d/de/Dotted_quarter_rest.png/250px-Dotted_quarter_rest.png",1271,1178],["Ghost note","commons/6/6e/Quarter_not_with_%22X%22_notehead.svg",394,259],["Multi-measure rest","commons/5/5f/Music-measurerest.svg",201,150]]},
+{"name":"Clefs","items":[["G clef (Treble clef)","commons/d/d4/Music-GClef.svg",512,512],["Alto clef (C clef)","commons/0/02/Alto-clef.svg",425,261],["Tenor clef","commons/c/c3/Tenor-clef.svg",424,293],["F clef (Bass clef)","commons/2/23/Music-Fclef.svg",600,300],["Octave clef","commons/8/84/Octaveclef3.jpg",191,234],["Octave clef","commons/8/8b/Octaveclef4.jpg",191,234],["Octave clef","commons/2/23/Octaveclef.svg",61,75],["Octave clef","commons/4/42/Octaveclef5.jpg",191,234],["Octave clef","https://thumb.wikimedia.org/wikipedia/commons/thumb/3/3a/Music-GClef2.jpg/250px-Music-GClef2.jpg",625,625],["Neutral clef","commons/9/95/Music-neutralclef.svg",600,300],["On a single-line staff","commons/6/65/Music-unpitchedclef.svg",600,300],["Tablature","commons/4/48/Music-TabClef.svg",200,200]]},
+{"name":"Rhythmic values of notes and rests","items":[["Large (Maxima) / Octuple whole note","commons/1/1f/Music-octwholenote.svg",600,300],["Large (Maxima) / Octuple whole rest","commons/a/a4/Maxima_rest.svg",36,29],["Longa / Quadruple whole note","commons/f/fc/Music-quadwholenote.svg",600,300],["Longa / Quadruple whole rest","commons/4/4c/Music-quadwholerest.svg",600,299],["Breve / Double whole note","commons/d/dc/Music-doublewholenote.svg",600,299],["Breve / Double whole note","commons/1/12/Music-doublewholerest.svg",600,300],["Semibreve / Whole note","commons/a/a0/Music-wholenote.svg",600,299],["Semibreve / Whole note","commons/8/8c/Music-wholerest.svg",200,148],["Minim / Half note","commons/c/c1/Music-halfnote.svg",199,103],["Minim / Half note","commons/e/ec/Music-halfrest.svg",891,659],["Crotchet / Quarter note","commons/f/fb/Music-quarternote.svg",200,200],["Crotchet / Quarter note","commons/8/8c/Crochet2.svg",199,100],["Crotchet / Quarter note","commons/6/66/Music-quarterrest.svg",199,100],["Quaver / Eighth note","commons/5/5b/Music-eighthnote.svg",200,200],["Quaver / Eighth note","commons/7/7c/Music-eighthrest.svg",199,103],["Semiquaver / Sixteenth note","commons/5/57/Music-sixteenthnote.svg",200,200],["Semiquaver / Sixteenth note","commons/4/4d/Music-sixteenthrest.svg",199,103],["Demisemiquaver / Thirty-second note","commons/b/b1/Music-thirtysecondnote.svg",200,200],["Demisemiquaver / Thirty-second note","commons/7/75/Music-thirtysecondrest.svg",199,103],["Hemidemisemiquaver / Sixty-fourth note","commons/b/b0/Sixtyfourth-note.svg",599,398],["Hemidemisemiquaver / Sixty-fourth note","commons/9/92/Music-sixtyfourthrest.svg",199,130],["Semihemidemisemiquaver / Quasihemidemisemiquaver / Hundred twenty-eighth note","commons/a/ab/Music-hundredtwentyeighthnote.svg",599,450],["Semihemidemisemiquaver / Quasihemidemisemiquaver / Hundred twenty-eighth note","commons/e/e1/Music-hundredtwentyeighthrest.svg",200,200],["Two hundred fifty-sixth note","commons/7/7f/Semigarrapatea.svg",200,200],["Two hundred fifty-sixth rest","commons/3/3c/Silencio_de_semigarrapatea.svg",200,200],["Beamed notes","commons/3/34/Music-beam.svg",200,200],["Beamed notes","https://thumb.wikimedia.org/wikipedia/commons/thumb/6/63/Four_sixteenth_notes.png/250px-Four_sixteenth_notes.png",329,167],["Dotted note","commons/6/6c/Music-dotnote.svg",200,200],["Dotted note","https://thumb.wikimedia.org/wikipedia/commons/thumb/d/de/Dotted_quarter_rest.png/250px-Dotted_quarter_rest.png",1271,1178],["Ghost note","commons/6/6e/Quarter_not_with_%22X%22_notehead.svg",394,259],["Multi-measure rest","commons/5/5f/Music-measurerest.svg",201,150]]},
 {"name":"Breaks","items":[["Breath mark","commons/3/31/Music-breath.svg",600,387],["Caesura","commons/7/73/Music-caesura.svg",600,387]]},
 {"name":"Accidentals and key signatures: Common accidentals","items":[["Flat","commons/c/c7/Music-flat.svg",200,200],["Sharp","commons/d/da/Music-sharp.svg",200,200],["Natural","commons/f/f4/Music-natural.svg",200,200],["Double flat","commons/8/81/Music-doubleflat.svg",200,200],["Double sharp","commons/b/ba/Music-doublesharp3.svg",200,200]]},
-{"name":"Accidentals and key signatures: Key signatures","items":[["Flat key signatures","commons/d/de/Key-Signatures-flats.svg",5680,465],["Flat key signatures","commons/e/e1/Key-Signatures-sharps.svg",5675,490]]},
+{"name":"Accidentals and key signatures: Key signatures","items":[["Flat key signatures","commons/d/de/Key-Signatures-flats.svg",5680,465],["Sharp key signatures","commons/e/e1/Key-Signatures-sharps.svg",5675,490]]},
 {"name":"Accidentals and key signatures: Microtones","items":[["Demiflat","commons/4/49/Music-demiflat.svg",200,200],["Demiflat","https://thumb.wikimedia.org/wikipedia/commons/thumb/0/03/Music-flat2.jpg/250px-Music-flat2.jpg",625,625],["Flat-and-a-half","commons/b/be/Music-sesquiflat.svg",200,200],["Flat-and-a-half","https://thumb.wikimedia.org/wikipedia/commons/thumb/9/92/Music-doubleflat2.jpg/250px-Music-doubleflat2.jpg",625,625],["Demisharp","commons/3/30/Music-demisharp.svg",200,200],["Sharp-and-a-half","commons/a/af/Music-sesquisharp.svg",200,200],["Harmonic flat","https://thumb.wikimedia.org/wikipedia/commons/thumb/6/6e/Septimal_minor_third_on_C.png/250px-Septimal_minor_third_on_C.png",539,252],["Harmonic flat","https://thumb.wikimedia.org/wikipedia/commons/thumb/5/5b/Notation_of_partials_1-19_for_1-1.png/250px-Notation_of_partials_1-19_for_1-1.png",1030,266]]},
 {"name":"Time signatures","items":[["Simple time signatures","commons/d/db/Music-timesig.svg",200,200],["Compound time signatures","https://thumb.wikimedia.org/wikipedia/commons/thumb/9/90/Compound_duple_drum_pattern.png/250px-Compound_duple_drum_pattern.png",544,242],["Complex/irregular time signatures","https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ed/Five-four_time_signature.png/250px-Five-four_time_signature.png",620,431],["Common time","commons/a/ab/Music-commontime.svg",200,200],["Alla breve","commons/8/86/Music-cuttime.svg",200,200],["Metronome mark","commons/f/fc/Music-metronome.svg",200,200]]},
 {"name":"Note relationships","items":[["Tie","https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ad/Tie-music.png/250px-Tie-music.png",318,221],["Slur","commons/0/01/Music-slur.svg",200,200],["Slur","commons/1/13/Music-legato.svg",200,200],["Glissando","commons/4/4f/Music-glissando.svg",200,200],["Tuplet","commons/2/25/Music-triplet.svg",200,200],["Chord","commons/7/73/Music-triad.svg",200,200],["Arpeggiated chord","commons/7/7e/Music-arpeggio.svg",200,200]]},
@@ -213,6 +220,9 @@ const SYMBOL_GROUPS = [{"name":"Lines","items":[["Staff/stave","commons/2/20/Mus
 {"name":"Instrument-specific notation: Bowed string instruments","items":[["Left-hand pizzicato","commons/d/dd/Music-pizzicato.svg",200,200],["Snap pizzicato","commons/8/85/Music-snappizzicato.svg",200,200],["Natural harmonic","commons/7/7e/Music-harmonic.svg",200,200],["Up bow","commons/3/3f/Music-upbow.svg",200,200],["Down bow","commons/8/80/Music-downbow.svg",200,200],["Con sordino","commons/0/09/Con_sordino.svg",600,400],["Senza sordino","commons/2/27/Senza_sordino.svg",600,400]]},
 {"name":"Instrument-specific notation: Pedal marks","items":[["Engage pedal","commons/0/08/Pedal_Mark_1.svg",40,26],["Release pedal","commons/2/2f/Music-pedalup.svg",139,135],["Variable pedal mark","commons/d/d9/Music-pedal0.svg",781,781],["Variable pedal mark","commons/b/bb/Music-pedal.svg",200,200]]}];
 const imgUrl = u => u.startsWith('http') ? u : 'https://upload.wikimedia.org/wikipedia/' + u;
+// Note and rest images that the built-in palette already provides (breve to 128th, plus dotted) are left out of the library
+const BUILT_IN = /\/(Music-(doublewhole|whole|half|quarter|eighth|sixteenth|thirtysecond|sixtyfourth|hundredtwentyeighth)(note|rest)|Crochet2|Sixtyfourth-note|Music-dotnote)\.svg$|\/(250px-)?Dotted_quarter_rest\.png$/;
+SYMBOL_GROUPS.forEach(g => g.items = g.items.filter(([, u]) => !BUILT_IN.test(u)));
 // Text-based notation from the same page (fingerings, hand and organ manual abbreviations)
 SYMBOL_GROUPS.push(
   { name: 'Fingering', text: true, items: ['0', '1', '2', '3', '4', '5', '6', '+', 'T', 'ϙ', 'p', 'i', 'm', 'a', 'c', 'x', 'e', 'q'].map(t => [t, t]) },
@@ -227,6 +237,10 @@ let tool = { kind: 'note', dur: 'quarter' };
 let sel = null; // { si, ii }
 let selMark = null; // { si, mi }: selected library symbol
 let reveal = null; // { si, x }: scroll this stave so x is visible after the next render
+let dotted = false; // place new notes/rests dotted
+// Notes/rests get stable ids so library symbols can stay attached to them
+let lastId = 0;
+const newId = () => ++lastId;
 
 function load() { try { return JSON.parse(localStorage.getItem('the-staves-v2')); } catch { return null; } }
 function save() { try { localStorage.setItem('the-staves-v2', JSON.stringify(state)); } catch {} }
@@ -253,6 +267,7 @@ const line = (g, x1, y1, x2, y2, w = 1.3) => el('line', { x1, y1, x2, y2, stroke
 // Rests are drawn as shapes so their position on the staff is exact, independent of font metrics.
 function drawRest(g, durId, x) {
   const f = { fill: 'currentColor' };
+  if (durId === 'breve') return el('rect', { x: x - 4, y: yOf(2), width: 8, height: 2 * STEP, ...f }, g);    // fills the 3rd space
   if (durId === 'whole') return el('rect', { x: x - 8, y: yOf(2), width: 16, height: STEP, ...f }, g);   // hangs from 4th line
   if (durId === 'half') return el('rect', { x: x - 8, y: yOf(4) - STEP, width: 16, height: STEP, ...f }, g); // sits on middle line
   if (durId === 'quarter') {
@@ -260,8 +275,8 @@ function drawRest(g, durId, x) {
     return el('path', { d: `M${x - 3} ${y - 19} L${x + 5} ${y - 8} Q${x - 1} ${y - 3} ${x + 5} ${y + 6}
       Q${x - 6} ${y + 3} ${x + 1} ${y + 16} Q${x - 10} ${y + 9} ${x - 1} ${y + 6} L${x - 5} ${y - 2} Q${x + 1} ${y - 8} ${x - 3} ${y - 19} Z`, ...f }, g);
   }
-  const n = durId === 'eighth' ? 1 : 2;
-  const yTop = yOf(3) - 1;
+  const n = durOf(durId).flags;
+  const yTop = yOf(3) - 1 - Math.max(0, n - 2) * 4.5;
   line(g, x + 5, yTop, x - 2 - n, yTop + 14 + n * 9, 1.8);
   for (let i = 0; i < n; i++) {
     const cy = yTop + 2 + i * 9;
@@ -276,8 +291,10 @@ function drawNote(g, durId, x, s) {
   for (let l = 10; l <= s; l += 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
   el('ellipse', { cx: x, cy: y, rx: 7.6, ry: 5.4, transform: `rotate(-20 ${x} ${y})`,
     fill: d.filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': d.filled ? 0 : 2.2 }, g);
+  if (d.id === 'breve') for (const bx of [-11, -13.5, 11, 13.5]) line(g, x + bx, y - 7, x + bx, y + 7, 1.4);
   if (!d.stem) return;
-  const up = s >= 4, sx = up ? x + 6.8 : x - 6.8, sy2 = up ? y - 38 : y + 38;
+  const len = 38 + Math.max(0, d.flags - 2) * 8;
+  const up = s >= 4, sx = up ? x + 6.8 : x - 6.8, sy2 = up ? y - len : y + len;
   line(g, sx, y + (up ? -1 : 1), sx, sy2, 1.6);
   for (let f = 0; f < d.flags; f++) {
     const fy = sy2 + (up ? f * 8 : -f * 8), dir = up ? 1 : -1;
@@ -286,7 +303,13 @@ function drawNote(g, durId, x, s) {
   }
 }
 
-const drawSymbol = (g, kind, durId, x, s) => kind === 'rest' ? drawRest(g, durId, x) : drawNote(g, durId, x, s);
+function drawSymbol(g, kind, durId, x, s, dot) {
+  if (kind === 'rest') drawRest(g, durId, x); else drawNote(g, durId, x, s);
+  if (!dot) return;
+  // the dot sits in a space: notes on a line move it up into the space above
+  const ds = kind === 'rest' ? 3 : s % 2 === 0 ? s - 1 : s;
+  el('circle', { cx: x + (durId === 'breve' ? 20 : 15), cy: yOf(ds), r: 2.6, fill: 'currentColor' }, g);
+}
 
 function repeatDots(g, x) {
   el('circle', { cx: x, cy: yOf(3), r: 2.4, fill: 'currentColor' }, g);
@@ -305,10 +328,9 @@ function layout(stave, minWidth) {
   x += 14;
   let fill = 0, barStart = x - 14;
   stave.items.forEach((it, ii) => {
-    const dur = durOf(it.dur);
     out.items.push({ x: x + 6 });
-    x += dur.adv;
-    fill += dur.val;
+    x += itemAdv(it);
+    fill += itemVal(it);
     const last = ii === stave.items.length - 1;
     if (fill > cap + 1e-9) out.over.push([barStart, x]);
     if (fill >= cap - 1e-9 && !last) {
@@ -360,6 +382,8 @@ function drawStave(svg, stave, si, L) {
 }
 
 function render() {
+  for (const st of state.staves) for (const it of st.items) lastId = Math.max(lastId, it.id || 0);
+  for (const st of state.staves) for (const it of st.items) it.id ||= newId();
   save();
   const host = document.getElementById('staves');
   const sx = [...host.querySelectorAll('.scroller')].map(s => s.scrollLeft);
@@ -396,7 +420,7 @@ function render() {
     stave.items.forEach((it, ii) => {
       const x = L.items[ii].x, s = it.kind === 'rest' ? 4 : pitchToStep(stave.clef, it.p);
       const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : '') }, svg);
-      drawSymbol(g, it.kind, it.dur, x, s);
+      drawSymbol(g, it.kind, it.dur, x, s, it.dot);
       const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(s) - 8, yOf(s) + 8];
       el('rect', { x: x - 13, y: ys[0], width: 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
@@ -411,9 +435,22 @@ function render() {
       });
     });
 
+    // Library symbols snap: horizontally onto the nearest note/rest (and then follow it), vertically onto staff lines/spaces
+    const markPos = m => {
+      const ii = m.a != null ? stave.items.findIndex(it => it.id === m.a) : -1;
+      return { x: ii >= 0 ? L.items[ii].x : m.x, y: yOf(m.s) };
+    };
+    const snap = p => {
+      let best = -1, bd = 34;
+      L.items.forEach((li, ii) => { const d = Math.abs(li.x - p.x); if (d < bd) { bd = d; best = ii; } });
+      const s = Math.max(-10, Math.min(18, Math.round((p.y - TOP) / STEP)));
+      return best >= 0 ? { a: stave.items[best].id, x: L.items[best].x, s } : { a: null, x: Math.max(20, Math.round(p.x / 12) * 12), s };
+    };
     stave.marks.forEach((m, mi) => {
+      if (m.s == null) Object.assign(m, { s: Math.round((m.y - TOP) / STEP), a: null });
       const g = el('g', { class: 'mark' + (selMark && selMark.si === si && selMark.mi === mi ? ' sel' : '') }, svg);
-      drawMark(g, m, m.x, m.y);
+      const mp = markPos(m);
+      drawMark(g, m, mp.x, mp.y);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
       g.addEventListener('contextmenu', e => { e.preventDefault(); removeMark(si, mi); });
@@ -423,12 +460,16 @@ function render() {
         g.setPointerCapture(e.pointerId);
         const x0 = e.clientX, y0 = e.clientY;
         let dx = 0, dy = 0;
-        g.onpointermove = ev => { dx = ev.clientX - x0; dy = ev.clientY - y0; g.setAttribute('transform', `translate(${dx} ${dy})`); };
+        g.onpointermove = ev => {
+          dx = ev.clientX - x0; dy = ev.clientY - y0;
+          const t = snap({ x: mp.x + dx, y: mp.y + dy });
+          g.setAttribute('transform', `translate(${t.x - mp.x} ${yOf(t.s) - mp.y})`);
+        };
         g.onpointerup = () => {
           g.onpointermove = g.onpointerup = null;
           if (Math.abs(dx) + Math.abs(dy) > 3) {
             selMark = { si, mi }; sel = null;
-            return commit(() => { m.x = Math.max(10, m.x + dx); m.y = Math.max(10, Math.min(H - 10, m.y + dy)); });
+            return commit(() => Object.assign(m, snap({ x: mp.x + dx, y: mp.y + dy })));
           }
           if (tool.kind === 'erase') return removeMark(si, mi);
           selMark = selMark && selMark.si === si && selMark.mi === mi ? null : { si, mi };
@@ -450,9 +491,9 @@ function render() {
     const showGhost = e => {
       ghost.innerHTML = '';
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
-      if (tool.kind === 'mark') { const p = svgPoint(e); return drawMark(ghost, tool.sym, p.x, p.y); }
+      if (tool.kind === 'mark') { const t = snap(svgPoint(e)); return drawMark(ghost, tool.sym, t.x, yOf(t.s)); }
       const s = stepAt(e);
-      drawSymbol(ghost, tool.kind, tool.dur, insX, s);
+      drawSymbol(ghost, tool.kind, tool.dur, insX, s, dotted);
       if (tool.kind === 'note') {
         const t = el('text', { x: insX + 16, y: yOf(s) + 4, 'font-size': 12, 'font-family': 'Inter, sans-serif', 'font-weight': 600, fill: 'var(--accent)' }, ghost);
         t.textContent = pitchName(stepToPitch(stave.clef, s));
@@ -468,13 +509,13 @@ function render() {
       down = false;
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
       if (tool.kind === 'mark') {
-        const p = svgPoint(e);
         selMark = { si, mi: stave.marks.length }; sel = null;
-        return commit(() => stave.marks.push({ ...tool.sym, x: Math.round(p.x), y: Math.round(p.y) }));
+        return commit(() => stave.marks.push({ ...tool.sym, ...snap(svgPoint(e)) }));
       }
-      const item = { kind: tool.kind, dur: tool.dur };
+      const item = { kind: tool.kind, dur: tool.dur, id: newId() };
+      if (dotted) item.dot = true;
       if (tool.kind === 'note') item.p = stepToPitch(stave.clef, stepAt(e));
-      reveal = { si, x: insX + durOf(tool.dur).adv + 40 };
+      reveal = { si, x: insX + itemAdv(item) + 40 };
       commit(() => stave.items.splice(insAt, 0, item));
       if (sel && sel.si === si) { sel = { si, ii: insAt }; render(); }
     });
@@ -522,9 +563,9 @@ function resizeMark(f) {
   const h = Math.max(10, Math.min(160, m.h * f));
   commit(() => { if (m.t) m.h = h; else { m.w = m.w * h / m.h; m.h = h; } });
 }
-function moveMark(dy) {
+function moveMark(ds) {
   const m = selMark && state.staves[selMark.si]?.marks[selMark.mi];
-  if (m) commit(() => m.y += dy);
+  if (m) commit(() => m.s = Math.max(-10, Math.min(18, m.s + ds)));
 }
 
 function buildLibrary() {
@@ -568,8 +609,17 @@ function buildLibrary() {
 }
 
 function removeItem(si, ii) {
-  sel = null;
-  commit(() => state.staves[si].items.splice(ii, 1));
+  sel = selMark = null;
+  commit(() => {
+    const st = state.staves[si], [gone] = st.items.splice(ii, 1);
+    st.marks = st.marks.filter(m => m.a == null || m.a !== gone.id);  // symbols attached to it go too
+  });
+}
+function toggleDot() {
+  const it = sel && state.staves[sel.si]?.items[sel.ii];
+  if (it) return commit(() => it.dot = !it.dot);
+  dotted = !dotted;
+  document.getElementById('dotTool').setAttribute('aria-pressed', dotted);
 }
 function nudge(delta) {
   const it = sel && state.staves[sel.si]?.items[sel.ii];
@@ -584,18 +634,26 @@ function buildPalette() {
     const b = document.createElement('button');
     b.className = 'tool'; b.dataset.kind = kind; b.dataset.dur = d.id;
     b.title = `${d.name} ${kind} (${kind === 'rest' ? 'Shift+' : ''}${i + 1})`;
-    const svg = el('svg', { viewBox: kind === 'rest' ? '-15 42 30 46' : '-15 40 30 52' });
+    const deep = d.flags >= 3;
+    const svg = el('svg', { viewBox: kind === 'rest' ? (deep ? '-17 34 34 64' : '-15 42 30 46') : (deep ? '-18 14 36 74' : '-15 40 30 52') });
     drawSymbol(svg, kind, d.id, 0, 4);
     b.appendChild(svg);
     b.onclick = () => setTool({ kind, dur: d.id });
     document.getElementById(kind === 'rest' ? 'rests' : 'notes').appendChild(b);
   };
   DURS.forEach((d, i) => make('note', d, i));
+  const dot = document.createElement('button');
+  dot.className = 'tool'; dot.id = 'dotTool'; dot.title = 'Dotted (.) – lengthens by half; toggles the selected note if one is selected';
+  dot.setAttribute('aria-pressed', false);
+  dot.innerHTML = '<svg viewBox="-15 40 30 52"><circle cx="0" cy="66" r="4" fill="currentColor"/></svg>';
+  dot.onclick = toggleDot;
+  document.getElementById('notes').appendChild(dot);
   DURS.forEach((d, i) => make('rest', d, i));
 }
 function setTool(t) {
   tool = t;
   document.querySelectorAll('.tool').forEach(b => {
+    if (b.id === 'dotTool') return;
     const on = b.id === 'eraser' ? t.kind === 'erase' : b.dataset.kind === t.kind && b.dataset.dur === t.dur;
     b.setAttribute('aria-pressed', on);
   });
@@ -615,8 +673,8 @@ function toast(msg) {
 document.getElementById('eraser').onclick = () => setTool(tool.kind === 'erase' ? { kind: 'note', dur: 'quarter' } : { kind: 'erase' });
 document.getElementById('undo').onclick = undo;
 document.getElementById('redo').onclick = redo;
-document.getElementById('selUp').onclick = () => selMark ? moveMark(-3) : nudge(1);
-document.getElementById('selDown').onclick = () => selMark ? moveMark(3) : nudge(-1);
+document.getElementById('selUp').onclick = () => selMark ? moveMark(-1) : nudge(1);
+document.getElementById('selDown').onclick = () => selMark ? moveMark(1) : nudge(-1);
 document.getElementById('selSmaller').onclick = () => resizeMark(1 / 1.2);
 document.getElementById('selBigger').onclick = () => resizeMark(1.2);
 document.getElementById('selDel').onclick = () => selMark ? removeMark(selMark.si, selMark.mi) : sel && removeItem(sel.si, sel.ii);
@@ -635,8 +693,8 @@ document.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod) return;
   if (selMark) {
-    if (e.key === 'ArrowUp') { e.preventDefault(); return moveMark(-3); }
-    if (e.key === 'ArrowDown') { e.preventDefault(); return moveMark(3); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); return moveMark(-1); }
+    if (e.key === 'ArrowDown') { e.preventDefault(); return moveMark(1); }
     if (e.key === '-') return resizeMark(1 / 1.2);
     if (e.key === '+' || e.key === '=') return resizeMark(1.2);
     if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); return removeMark(selMark.si, selMark.mi); }
@@ -652,7 +710,8 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { sel = null; return render(); }
   }
   const n = parseInt(e.code.replace('Digit', ''), 10);
-  if (n >= 1 && n <= 5) setTool({ kind: e.shiftKey ? 'rest' : 'note', dur: DURS[n - 1].id });
+  if (n >= 1 && n <= DURS.length) setTool({ kind: e.shiftKey ? 'rest' : 'note', dur: DURS[n - 1].id });
+  if (e.key === '.') toggleDot();
   if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
 });
 let rw;
