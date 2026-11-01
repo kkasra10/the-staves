@@ -394,13 +394,14 @@ const NATIVE = {
     const all = notes.flatMap(n => n.steps), up = all.reduce((a, b) => a + b, 0) / all.length >= 4, dir = up ? -1 : 1;
     const sx = n => n.x + (up ? 6.8 : -6.8), far = n => up ? yOf(Math.min(...n.steps)) : yOf(Math.max(...n.steps));
     const A = notes[0], B = notes[notes.length - 1], slope = Math.max(-0.25, Math.min(0.25, (far(B) - far(A)) / (sx(B) - sx(A) || 1))) * 0.5;
-    let y0 = far(A) + dir * 36;
-    for (const n of notes) { const need = far(n) + dir * 30 - slope * (sx(n) - sx(A)); y0 = up ? Math.min(y0, need) : Math.max(y0, need); }
+    // many beams (64ths and shorter) pack tighter and lengthen the stems so the innermost beam still clears the heads
+    const most = Math.max(...notes.map(n => n.flags)), gap = most > 3 ? 5.5 : 8, thick = most > 3 ? 3.5 : 5, reach = 26 + (most - 1) * gap + thick;
+    let y0 = far(A) + dir * (reach + 6);
+    for (const n of notes) { const need = far(n) + dir * reach - slope * (sx(n) - sx(A)); y0 = up ? Math.min(y0, need) : Math.max(y0, need); }
     const yAt = x => y0 + slope * (x - sx(A));
     for (const n of notes) line(g, sx(n), up ? yOf(Math.max(...n.steps)) : yOf(Math.min(...n.steps)), sx(n), yAt(sx(n)), 1.6);
-    const bar = (x0, x1, k) => el('path', { d: `M${x0} ${yAt(x0) - dir * k * 8} L${x1} ${yAt(x1) - dir * k * 8} L${x1} ${yAt(x1) - dir * (k * 8 + 5)} L${x0} ${yAt(x0) - dir * (k * 8 + 5)} Z`, fill: 'currentColor' }, g);
+    const bar = (x0, x1, k) => el('path', { d: `M${x0} ${yAt(x0) - dir * k * gap} L${x1} ${yAt(x1) - dir * k * gap} L${x1} ${yAt(x1) - dir * (k * gap + thick)} L${x0} ${yAt(x0) - dir * (k * gap + thick)} Z`, fill: 'currentColor' }, g);
     // first beam joins them all; each further beam joins neighbours that both have that many tails, or is a short stub
-    const most = Math.max(...notes.map(n => n.flags));
     for (let k = 0; k < most; k++) notes.forEach((n, i) => {
       if (n.flags <= k) return;
       const next = notes[i + 1], prev = notes[i - 1];
