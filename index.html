@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16150f" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="THE-Staves">
 <title>THE-Staves</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Music&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
@@ -16,14 +21,17 @@
       --line: #d9d3c6; --accent: #fb923c; --accent-soft: #3a2616; --border: #37332a; --over: rgba(248, 113, 113, .14); }
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  button, select, input { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, system-ui, sans-serif; }
-  header { display: flex; align-items: baseline; gap: 12px; padding: 20px 24px 8px; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 20px max(24px, env(safe-area-inset-right)) 8px max(24px, env(safe-area-inset-left)); }
   h1 { margin: 0; font-weight: 800; letter-spacing: -0.02em; font-size: 26px; }
   h1 span { color: var(--accent); }
   header small { color: var(--muted); }
 
   .toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
-    padding: 10px 24px; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px);
+    padding: 10px 24px; background: var(--bg); background: color-mix(in srgb, var(--bg) 92%, transparent);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
     border-bottom: 1px solid var(--border); }
   .group { display: flex; gap: 4px; align-items: center; flex-shrink: 0; }
   .group label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 4px; }
@@ -64,7 +72,7 @@
   /* Symbol library sidebar (same pattern as the LaTeX editor: search + collapsible groups + grid) */
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
   .layout main { max-width: none; margin: 0; min-width: 0; }
-  aside.library { position: sticky; top: 70px; height: calc(100vh - 70px); display: flex; flex-direction: column;
+  aside.library { position: sticky; top: 70px; height: calc(100vh - 70px); height: calc(100dvh - 70px); display: flex; flex-direction: column;
     border-left: 1px solid var(--border); background: var(--paper); }
   .lib-head { padding: 12px 14px 8px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
   .lib-head .count { color: var(--muted); font-weight: 400; font-size: 12px; }
@@ -105,14 +113,14 @@
     #libToggle { display: inline-flex; }
     aside.library { position: fixed; z-index: 8; left: 0; right: 0; top: auto; bottom: 0; height: 62vh; border-left: none;
       border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; box-shadow: 0 -10px 30px rgba(0,0,0,.2);
-      transform: translateY(105%); transition: transform .2s; }
-    aside.library.open { transform: none; }
+      transform: translateY(calc(100% + 120px)); visibility: hidden; transition: transform .2s, visibility .2s; }
+    aside.library.open { transform: none; visibility: visible; }
     .lib-head .close { display: block; }
     .sym-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
 
   /* Phones: one compact, horizontally scrolling tool bar pinned to the bottom */
-  @media (max-width: 700px) {
+  @media (max-width: 700px), (max-height: 500px) {
     header { padding: 14px 16px 4px; }
     main { padding: 12px 16px 120px; }
     .toolbar { position: fixed; top: auto; bottom: 0; left: 0; right: 0; flex-wrap: nowrap; overflow-x: auto; gap: 10px;
@@ -126,6 +134,34 @@
     .stave-head .remove { position: absolute; top: 4px; right: 2px; }
     .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
     aside.library { bottom: calc(63px + env(safe-area-inset-bottom)); height: 58vh; }
+  }
+  /* Touch screens (phones, tablets, touch laptops): bigger targets, and 16px form text so iOS does not zoom in on focus */
+  @media (pointer: coarse) {
+    .tool { min-width: 44px; height: 50px; }
+    .btn { min-height: 44px; }
+    .stave-head select, .lib-search input { font-size: 16px; }
+    .stave-head .remove { min-width: 40px; min-height: 40px; }
+    .sym-btn { min-height: 72px; }
+  }
+  /* Short screens (phones in landscape): taller symbol sheet, slimmer header */
+  @media (max-height: 500px) {
+    header { padding-top: 8px; padding-bottom: 2px; }
+    aside.library { height: 80vh; height: 80dvh; }
+  }
+  /* Large screens: a little more room for the symbol grid */
+  @media (min-width: 1500px) {
+    .layout { grid-template-columns: minmax(0, 1fr) 360px; }
+    .sym-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  }
+  /* Printing: just the music */
+  @media print {
+    body { background: #fff; color: #000; }
+    .toolbar, aside.library, .add-stave, .hint, .stave-head select, .stave-head .remove, .toast, .scroller::-webkit-scrollbar { display: none !important; }
+    .layout { display: block; }
+    main { padding: 0; }
+    .stave-wrap { border: none; break-inside: avoid; }
+    .scroller { overflow: visible; }
+    svg.stave .mark .box { display: none; }
   }
 </style>
 </head>
@@ -524,7 +560,7 @@ function drawStave(svg, stave, si, L) {
 
 function render() {
   for (const st of state.staves) for (const it of st.items) lastId = Math.max(lastId, it.id || 0);
-  for (const st of state.staves) for (const it of st.items) it.id ||= newId();
+  for (const st of state.staves) for (const it of st.items) if (!it.id) it.id = newId();
   save();
   const host = document.getElementById('staves');
   const sx = [...host.querySelectorAll('.scroller')].map(s => s.scrollLeft);
@@ -554,7 +590,7 @@ function render() {
     }
     wrap.appendChild(head);
 
-    stave.marks ||= [];
+    if (!stave.marks) stave.marks = [];
     const L = layout(stave, minWidth);
     const svg = el('svg', { viewBox: `0 0 ${L.width} ${H}`, width: L.width, height: H, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
     drawStave(svg, stave, si, L);
@@ -820,7 +856,7 @@ function buildLibrary() {
     const q = e.target.value.trim().toLowerCase();
     panel.querySelectorAll('.sym-group').forEach(sec => {
       let any = false;
-      sec.querySelectorAll('.sym-btn').forEach(b => { const hit = !q || b.dataset.search.includes(q); b.classList.toggle('hidden', !hit); any ||= hit; });
+      sec.querySelectorAll('.sym-btn').forEach(b => { const hit = !q || b.dataset.search.includes(q); b.classList.toggle('hidden', !hit); any = any || hit; });
       sec.classList.toggle('hidden', !any);
       if (q) sec.classList.remove('collapsed');
     });
