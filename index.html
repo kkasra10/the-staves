@@ -97,6 +97,10 @@
   .sym-btn[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
   .sym-btn img { width: 100%; height: 40px; object-fit: contain; pointer-events: none; }
   .sym-btn .txt { height: 40px; display: grid; place-items: center; font: italic 700 15px Georgia, serif; }
+  .sym-btn .txt.glyph { font: 400 22px 'Noto Music', Georgia, serif; white-space: nowrap; overflow: hidden; max-width: 100%; }
+  .stave-wrap { position: relative; }
+  .stave-wrap.joined .scroller { margin-left: 22px; }
+  .stave-wrap svg.join { position: absolute; left: 2px; color: var(--line); overflow: visible; pointer-events: none; }
   .sym-btn span.lbl { font-size: 8.5px; line-height: 1.15; color: #7a746a; text-align: center; overflow: hidden;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; width: 100%; }
   .lib-credit { font-size: 11px; color: var(--muted); padding: 8px 14px; border-top: 1px solid var(--border); }
@@ -191,6 +195,9 @@
   <div class="group" id="selGroup" hidden><label>Selected</label>
     <button class="btn" id="selUp" title="Raise pitch / move up (↑)">▲</button>
     <button class="btn" id="selDown" title="Lower pitch / move down (↓)">▼</button>
+    <button class="btn" id="selShorter" title="Cover one note/bar less ([)" hidden>◀ span</button>
+    <button class="btn" id="selLonger" title="Cover one note/bar more (])" hidden>span ▶</button>
+    <button class="btn" id="selEdit" title="Change its number or text" hidden>Edit…</button>
     <button class="btn" id="selSmaller" title="Smaller (−)" hidden>A−</button>
     <button class="btn" id="selBigger" title="Bigger (+)" hidden>A+</button>
     <button class="btn" id="selDel" title="Delete (Backspace)">Delete</button>
@@ -234,8 +241,11 @@ const DURS = [
   { id: 'thirtysecond', name: 'Thirty-second', val: 1 / 32, adv: 28, flags: 3, filled: true, stem: true },
   { id: 'sixtyfourth', name: 'Sixty-fourth', val: 1 / 64, adv: 28, flags: 4, filled: true, stem: true },
   { id: 'onetwentyeighth', name: 'Hundred twenty-eighth', val: 1 / 128, adv: 28, flags: 5, filled: true, stem: true },
+  { id: 'twofiftysixth', name: 'Two hundred fifty-sixth', val: 1 / 256, adv: 28, flags: 6, filled: true, stem: true },
 ];
-const durOf = id => DURS.find(d => d.id === id);
+// a multi-measure rest fills a whole bar whatever the time signature; it shows how many bars it stands for
+const MEASURE = { id: 'measure', name: 'Multi-measure rest', val: 0, adv: 150, flags: 0, filled: false, stem: false };
+const durOf = id => DURS.find(d => d.id === id) || (id === 'measure' ? MEASURE : undefined);
 // A dot lengthens a note or rest by half
 const itemVal = it => durOf(it.dur).val * (it.dot ? 1.5 : 1);
 const itemAdv = it => Math.round(durOf(it.dur).adv * (it.dot ? 1.35 : 1));
@@ -283,7 +293,288 @@ const BUILT_IN = /\/(Music-(doublewhole|whole|half|quarter|eighth|sixteenth|thir
 // key signatures and slurs are drawn by the app instead (Key dropdown per stave, drawn slur below)
 const EXAMPLES = /\/(\d+px-)?(Key-Signatures-(flats|sharps)\.svg|Septimal_minor_third_on_C\.png|Notation_of_partials_1-19_for_1-1\.png|Compound_duple_drum_pattern\.png|Music-(triad|tremolo|appoggiatura|acciaccatura|beam|slur|legato)\.svg|Music_Tremolo_shortcut\.jpg|Four_sixteenth_notes\.png)$/;
 SYMBOL_GROUPS.forEach(g => g.items = g.items.filter(([, u]) => !BUILT_IN.test(u) && !EXAMPLES.test(u)));
-SYMBOL_GROUPS.find(g => g.name === 'Note relationships').items.splice(1, 0, ['Slur', 'draw:slur']);
+// ---------- Symbols the app draws itself (they stretch between notes, snap to barlines and take settings) ----------
+const txt = (g, x, y, str, o = {}) => {
+  const t = el('text', { x, y, 'font-family': o.font || 'Georgia, serif', 'font-size': o.size || 14, 'font-style': o.italic === false ? 'normal' : 'italic',
+    'font-weight': o.bold === false ? 400 : 700, 'text-anchor': o.anchor || 'middle', fill: 'currentColor' }, g);
+  t.textContent = str;
+  return t;
+};
+const box = (x0, y0, x1, y1) => ({ x: Math.min(x0, x1), y: Math.min(y0, y1), w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) });
+// notes from the anchored one to `span` notes later
+function spanOf(m, E, def) {
+  const a = E.idx(m);
+  if (a < 0) return null;
+  const b = Math.min(E.stave.items.length - 1, a + (m.span ?? def));
+  const ns = [];
+  for (let i = a; i <= b; i++) ns.push(E.note(i));
+  return { ns, A: ns[0], B: ns[ns.length - 1], open: a === b };
+}
+const minOf = (ns, f) => Math.min(...ns.map(f)), maxOf = (ns, f) => Math.max(...ns.map(f));
+function curve(g, x0, y0, x1, y1, peak, below) {
+  const cx = (x0 + x1) / 2, cy = 2 * peak - (y0 + y1) / 2, th = below ? -3 : 3;
+  el('path', { d: `M${x0} ${y0} Q${cx} ${cy} ${x1} ${y1} Q${cx} ${cy + th} ${x0} ${y0} Z`, fill: 'currentColor', stroke: 'currentColor', 'stroke-width': 1 }, g);
+  return box(x0, Math.min(y0, y1, peak), x1, Math.max(y0, y1, peak));
+}
+function wavy(g, x0, y0, x1, y1, amp = 3, period = 7) {
+  const len = Math.hypot(x1 - x0, y1 - y0), n = Math.max(2, Math.round(len / period)), ux = (x1 - x0) / len, uy = (y1 - y0) / len;
+  let d = `M${x0} ${y0}`;
+  for (let i = 1; i <= n; i++) {
+    const t = i / n, o = (i % 2 ? amp : -amp);
+    d += ` L${x0 + ux * len * t - uy * o} ${y0 + uy * len * t + ux * o}`;
+  }
+  el('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, g);
+}
+const barX = (m, E) => E.barXs[Math.max(0, Math.min(E.barXs.length - 1, m.bar ?? 0))];
+
+const NATIVE = {
+  // ---- note relationships ----
+  slur: { anchor: 'note', span: 1, draw(g, m, E) {
+    const R = spanOf(m, E, 1); if (!R) return null;
+    const below = R.A.up, edge = n => below ? Math.max(...n.ys) + 9 : Math.min(...n.ys) - 9;
+    const x0 = R.A.x + 2, x1 = R.open ? R.A.x + 50 : R.B.x - 2, y0 = edge(R.A), y1 = R.open ? y0 : edge(R.B);
+    const inner = below ? maxOf(R.ns, edge) : minOf(R.ns, edge);
+    const bow = 8 + (x1 - x0) * 0.05;
+    return curve(g, x0, y0, x1, y1, below ? Math.max(y0, y1, inner) + bow : Math.min(y0, y1, inner) - bow, below);
+  } },
+  tie: { anchor: 'note', draw(g, m, E) {
+    const R = spanOf({ ...m, span: 1 }, E, 1); if (!R) return null;
+    const below = R.A.up, y = R.A.y + (below ? 8 : -8), x0 = R.A.x + 6, x1 = R.open ? R.A.x + 40 : R.B.x - 6;
+    return curve(g, x0, y, x1, y, y + (below ? 7 : -7), below);
+  } },
+  gliss: { anchor: 'note', draw(g, m, E) {
+    const R = spanOf({ ...m, span: 1 }, E, 1); if (!R) return null;
+    const x0 = R.A.x + 11, y0 = R.A.y, x1 = R.open ? R.A.x + 60 : R.B.x - 11, y1 = R.open ? y0 : R.B.y;
+    if (m.var === 'straight') {
+      line(g, x0, y0, x1, y1, 1.5);
+      const t = txt(g, (x0 + x1) / 2, (y0 + y1) / 2 - 4, 'gliss.', { size: 10, bold: false });
+      t.setAttribute('transform', `rotate(${Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI} ${(x0 + x1) / 2} ${(y0 + y1) / 2})`);
+    } else wavy(g, x0, y0, x1, y1);
+    return box(x0, y0 - 6, x1, y1 + 6);
+  } },
+  tuplet: { anchor: 'note', span: 2, edit: m => askNumber('Tuplet number (e.g. 3, 5, 6, 7)', m.num || 3, 2, 32, 'num'), draw(g, m, E) {
+    const R = spanOf(m, E, (m.num || 3) - 1); if (!R) return null;
+    const above = R.A.up, y = above ? minOf(R.ns, n => n.top) - 9 : maxOf(R.ns, n => n.bot) + 9, h = above ? 6 : -6;
+    const x0 = R.A.x - 9, x1 = R.B.x + 9, mid = (x0 + x1) / 2;
+    el('path', { d: `M${x0} ${y + h} L${x0} ${y} L${mid - 9} ${y} M${mid + 9} ${y} L${x1} ${y} L${x1} ${y + h}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.3 }, g);
+    txt(g, mid, y + 5, String(m.num || 3), { size: 14 });
+    return box(x0, y - 8, x1, y + 8);
+  } },
+  arpeggio: { anchor: 'note', draw(g, m, E) {
+    const i = E.idx(m); if (i < 0) return null;
+    const n = E.note(i), x = n.x - 24, y0 = Math.min(...n.ys) - 8, y1 = Math.max(...n.ys) + 8;
+    wavy(g, x, y0, x, y1, 2.5, 5);
+    return box(x - 4, y0, x + 4, y1);
+  } },
+  // ---- dynamics hairpins, octave lines, pedal line ----
+  cresc: { anchor: 'note', span: 1, draw(g, m, E) { return hairpin(g, m, E, true); } },
+  dim: { anchor: 'note', span: 1, draw(g, m, E) { return hairpin(g, m, E, false); } },
+  ottava: { anchor: 'note', span: 2, draw(g, m, E) {
+    const R = spanOf(m, E, 2); if (!R) return null;
+    const above = /a$/.test(m.var), x0 = R.A.x - 8, x1 = R.open ? R.A.x + 60 : R.B.x + 10;
+    const y = above ? Math.min(yOf(-4), minOf(R.ns, n => n.top) - 24) : Math.max(yOf(11.5), maxOf(R.ns, n => n.bot) + 14);
+    txt(g, x0, y, m.var, { size: 13, anchor: 'start' });
+    const lx = x0 + m.var.length * 7 + 2, ly = y - 4;
+    el('line', { x1: lx, y1: ly, x2: x1, y2: ly, stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-dasharray': '4 3' }, g);
+    line(g, x1, ly, x1, ly + (above ? 8 : -8), 1.2);
+    return box(x0, y - 12, x1, y + 6);
+  } },
+  pedline: { anchor: 'note', span: 2, draw(g, m, E) {
+    const R = spanOf(m, E, 2); if (!R) return null;
+    const x0 = R.A.x - 8, x1 = R.open ? R.A.x + 60 : R.B.x + 8, y = Math.max(yOf(8) + 36, maxOf(R.ns, n => n.bot) + 26);
+    el('path', { d: `M${x0} ${y - 10} L${x0} ${y} L${x1} ${y} L${x1} ${y - 10}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+    return box(x0, y - 10, x1, y + 2);
+  } },
+  // ---- single marks on a note ----
+  metronome: { anchor: 'note', edit: m => askNumber('Beats per minute', m.bpm || 120, 10, 400, 'bpm'), draw(g, m, E) {
+    const i = E.idx(m), n = i >= 0 ? E.note(i) : { x: m.x || 90, top: yOf(0) };
+    const y = Math.min(yOf(-3), n.top - 8), x0 = n.x - 18, k = 0.5;
+    const ng = el('g', { transform: `translate(${x0} ${y - yOf(4) * k}) scale(${k})` }, g);
+    drawSymbol(ng, 'note', m.unit || 'quarter', 0, 4, m.dotted);
+    txt(g, x0 + (m.dotted ? 16 : 10), y + 4, '= ' + (m.bpm || 120), { anchor: 'start', italic: false, size: 14 });
+    return box(x0 - 6, y - 24, x0 + 66, y + 8);
+  } },
+  bow: { anchor: 'note', draw(g, m, E) {
+    const i = E.idx(m); if (i < 0) return null;
+    const n = E.note(i), x = n.x, y = Math.min(yOf(-1), n.top - 8);
+    const v = m.var;
+    if (v === 'down') { el('rect', { x: x - 7, y: y - 12, width: 14, height: 3.5, fill: 'currentColor' }, g); line(g, x - 6.3, y - 12, x - 6.3, y, 1.4); line(g, x + 6.3, y - 12, x + 6.3, y, 1.4); }
+    if (v === 'up') el('path', { d: `M${x - 6} ${y - 15} L${x} ${y} L${x + 6} ${y - 15}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6 }, g);
+    if (v === 'harmonic') el('circle', { cx: x, cy: y - 5, r: 4, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }, g);
+    if (v === 'snap') { el('circle', { cx: x, cy: y - 5, r: 5, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }, g); line(g, x, y - 5, x, y - 16, 1.5); }
+    if (v === 'lh') { line(g, x - 5, y - 6, x + 5, y - 6, 1.8); line(g, x, y - 11, x, y - 1, 1.8); }
+    if (v === 'con' || v === 'senza') { txt(g, x, Math.min(yOf(-2), n.top - 8), v === 'con' ? 'con sord.' : 'senza sord.', { size: 13 }); return box(x - 34, y - 26, x + 34, y); }
+    return box(x - 8, y - 17, x + 8, y + 1);
+  } },
+  ped: { anchor: 'note', draw(g, m, E) {
+    const i = E.idx(m); if (i < 0) return null;
+    const n = E.note(i), y = Math.max(yOf(8) + 34, n.bot + 24);
+    if (m.var === 'up') txt(g, n.x, y + 4, '✱', { size: 16, italic: false, bold: false });
+    else txt(g, n.x - 10, y, 'Ped.', { size: 16, anchor: 'start' });
+    return box(n.x - 12, y - 14, n.x + (m.var === 'up' ? 12 : 30), y + 6);
+  } },
+  // ---- barline symbols ----
+  repStart: { anchor: 'bar', draw(g, m, E) {
+    const x = barX(m, E);
+    el('rect', { x, y: yOf(0), width: 4.5, height: 4 * GAP, fill: 'currentColor' }, g);
+    line(g, x + 8, yOf(0), x + 8, yOf(8), 1.3); repeatDots(g, x + 14);
+    return box(x - 2, yOf(0), x + 18, yOf(8));
+  } },
+  repEnd: { anchor: 'bar', draw(g, m, E) {
+    const x = barX(m, E);
+    el('rect', { x: x - 4.5, y: yOf(0), width: 4.5, height: 4 * GAP, fill: 'currentColor' }, g);
+    line(g, x - 8, yOf(0), x - 8, yOf(8), 1.3); repeatDots(g, x - 14);
+    return box(x - 18, yOf(0), x + 2, yOf(8));
+  } },
+  simile1: { anchor: 'barMid', draw(g, m, E) {
+    const k = Math.max(0, Math.min(E.barXs.length - 2, m.bar ?? 0)), x = (E.barXs[k] + E.barXs[k + 1]) / 2;
+    simileSlash(g, x); repeatDotsDiag(g, x, 8);
+    return box(x - 12, yOf(1), x + 12, yOf(7));
+  } },
+  simile2: { anchor: 'bar', draw(g, m, E) {
+    const x = barX(m, E);
+    simileSlash(g, x - 5); simileSlash(g, x + 5); repeatDotsDiag(g, x, 13);
+    txt(g, x, yOf(-1.5), '2', { italic: false, size: 15 });
+    return box(x - 16, yOf(-3), x + 16, yOf(7));
+  } },
+  volta: { anchor: 'barMid', span: 1, edit: m => askText('Ending label (e.g. 1.  2.  1.–3.)', m.text || '1.', 'text'), draw(g, m, E) {
+    const k = Math.max(0, Math.min(E.barXs.length - 2, m.bar ?? 0)), k2 = Math.min(E.barXs.length - 1, k + (m.span ?? 1));
+    const x0 = E.barXs[k] + 3, x1 = E.barXs[k2] - 3;
+    const tops = E.stave.items.map((_, i) => E.note(i)).filter(n => n.x > x0 && n.x < x1).map(n => n.top);
+    const y = Math.min(yOf(-6), ...tops.map(t => t - 12));
+    el('path', { d: `M${x0} ${y + 18} L${x0} ${y} L${x1} ${y}` + (m.closed === false ? '' : ` L${x1} ${y + 18}`), fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+    txt(g, x0 + 5, y + 14, m.text || '1.', { italic: false, size: 13, anchor: 'start' });
+    return box(x0, y, x1, y + 18);
+  } },
+  segno: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-1.2), '\u{1D10B}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 11, yOf(-6), x + 11, yOf(-1)); } },
+  coda: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-1.2), '\u{1D10C}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 12, yOf(-6), x + 12, yOf(-1)); } },
+  dir: { anchor: 'bar', edit: m => askText('Text', m.text, 'text'), draw(g, m, E) {
+    const x = barX(m, E) - 4, w = (m.text || '').length * 7.5;
+    txt(g, x, yOf(-1.8), m.text, { size: 14, anchor: 'end' });
+    return box(x - w, yOf(-4.5), x, yOf(-1));
+  } },
+  direct: { anchor: 'end', draw(g, m, E) {
+    const x = E.L.width - 30, nxt = E.nextFirst;
+    const st = Math.max(-4, Math.min(12, nxt != null ? pitchToStep(E.stave.clef, nxt) : 4)), y = yOf(st), up = st >= 4;
+    el('path', { d: `M${x - 8} ${y} L${x - 5} ${y - 4} L${x - 2} ${y} L${x + 1} ${y - 4} L${x + 4} ${y} L${x + 7} ${y - 4} L${x + 7} ${y + (up ? -20 : 18)}`,
+      fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linejoin': 'round' }, g);
+    return box(x - 9, y - 22, x + 9, y + 20);
+  } },
+  // ---- clefs drawn in the clef slot ----
+  clef: { anchor: 'clef', draw(g, m, E) {
+    const v = m.var, one = E.stave.lines === 1;
+    const glyph = { G8vb: '\u{1D120}', G8va: '\u{1D11F}', F8vb: '\u{1D124}', F8va: '\u{1D123}', G15mb: '\u{1D11E}', G15ma: '\u{1D11E}', GG: '\u{1D11E}' }[v];
+    if (glyph) {
+      const at = v[0] === 'F' ? 7.6 : 6;
+      if (v === 'GG') { txt(g, 14, yOf(at), glyph, { font: 'Noto Music', size: 52, italic: false, bold: false, anchor: 'start' }); }
+      txt(g, v === 'GG' ? 28 : 20, yOf(at), glyph, { font: 'Noto Music', size: 52, italic: false, bold: false, anchor: 'start' });
+      if (v.startsWith('G15')) txt(g, 37, v === 'G15mb' ? yOf(13.3) : yOf(-3.2), '15', { size: 11, italic: false });
+    } else {
+      const t = one ? yOf(2.6) : yOf(2), b = one ? yOf(5.4) : yOf(6);
+      if (v === 'neutralBox') el('rect', { x: 30, y: t, width: 14, height: b - t, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5 }, g);
+      else { el('rect', { x: 30, y: t, width: 4.5, height: b - t, fill: 'currentColor' }, g); el('rect', { x: 39.5, y: t, width: 4.5, height: b - t, fill: 'currentColor' }, g); }
+    }
+    return box(14, yOf(-3), 62, yOf(11));
+  } },
+};
+function hairpin(g, m, E, opening) {
+  const R = spanOf(m, E, 1); if (!R) return null;
+  const x0 = R.A.x - 6, x1 = R.open ? R.A.x + 70 : R.B.x + 6, y = Math.max(yOf(8), maxOf(R.ns, n => n.bot)) + 18;
+  const [p, q] = opening ? [x0, x1] : [x1, x0];
+  el('path', { d: `M${q} ${y - 5.5} L${p} ${y} L${q} ${y + 5.5}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+  return box(x0, y - 7, x1, y + 7);
+}
+function simileSlash(g, x) {
+  el('polygon', { points: `${x - 9},${yOf(6)} ${x - 3},${yOf(6)} ${x + 9},${yOf(2)} ${x + 3},${yOf(2)}`, fill: 'currentColor' }, g);
+}
+function repeatDotsDiag(g, x, dx) {
+  el('circle', { cx: x - dx, cy: yOf(3), r: 2.4, fill: 'currentColor' }, g);
+  el('circle', { cx: x + dx, cy: yOf(5), r: 2.4, fill: 'currentColor' }, g);
+}
+function askNumber(q, cur, min, max, key) {
+  const v = prompt(q, cur);
+  if (v == null) return null;
+  const n = Math.round(+v);
+  if (!(n >= min && n <= max)) { toast(`Please enter a number from ${min} to ${max}.`); return null; }
+  return { [key]: n };
+}
+function askText(q, cur, key) {
+  const v = prompt(q, cur || '');
+  return v == null || !v.trim() ? null : { [key]: v.trim().slice(0, 40) };
+}
+function askTime(cur) {
+  const v = prompt('Time signature, e.g. 7/8 or 5/4', cur || '7/8');
+  if (v == null) return null;
+  const m = v.trim().match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
+  if (!m || +m[1] < 1 || ![1, 2, 4, 8, 16, 32, 64].includes(+m[2])) { toast('Use a number over 1, 2, 4, 8, 16, 32 or 64, like 7/8.'); return null; }
+  return `${+m[1]}/${+m[2]}`;
+}
+
+// Library entries for the drawn symbols, by section of the article. Each picks a tool: a mark to place,
+// a stave setting to apply by tapping a stave, or a special rest.
+const mk = (d, extra = {}) => () => ({ kind: 'mark', sym: { d, ...extra } });
+const staveTool = apply => () => ({ kind: 'stave', apply });
+const timeTool = (time, sym) => staveTool(st => { st.time = time; st.timeSym = sym; });
+const NATIVE_LIB = {
+  'Lines': [
+    ['Brace (joins this stave to the next)', '\u{1D114}', staveTool(st => { st.join = st.join === 'brace' ? null : 'brace'; })],
+    ['Bracket (joins this stave to the next)', '\u{1D115}', staveTool(st => { st.join = st.join === 'bracket' ? null : 'bracket'; })],
+  ],
+  'Clefs': [
+    ['Treble clef, octave lower (8vb)', '\u{1D120}', mk('clef', { var: 'G8vb' })], ['Treble clef, octave higher (8va)', '\u{1D11F}', mk('clef', { var: 'G8va' })],
+    ['Treble clef, two octaves lower (15mb)', '\u{1D11E}₁₅', mk('clef', { var: 'G15mb' })], ['Treble clef, two octaves higher (15ma)', '\u{1D11E}¹⁵', mk('clef', { var: 'G15ma' })],
+    ['Bass clef, octave lower (8vb)', '\u{1D124}', mk('clef', { var: 'F8vb' })], ['Bass clef, octave higher (8va)', '\u{1D123}', mk('clef', { var: 'F8va' })],
+    ['Double treble clef', '\u{1D11E}\u{1D11E}', mk('clef', { var: 'GG' })],
+    ['Neutral clef (two bars)', '‖', mk('clef', { var: 'neutral' })], ['Neutral clef (box)', '▯', mk('clef', { var: 'neutralBox' })],
+    ['Percussion clef on a single-line staff', '‖—', mk('clef', { var: 'single' })],
+  ],
+  'Rhythmic values of notes and rests': [
+    ['Multi-measure rest (number of bars…)', '▬', () => { const r = askNumber('How many bars of rest?', 4, 2, 999, 'count'); return r && { kind: 'rest', dur: 'measure', count: r.count }; }],
+  ],
+  'Time signatures': [
+    ...['2/4', '3/4', '4/4'].map(t => [`Simple time ${t}`, t, timeTool(t)]),
+    ...['6/8', '9/8', '12/8'].map(t => [`Compound time ${t}`, t, timeTool(t)]),
+    ...['5/4', '7/8', '5/8'].map(t => [`Irregular time ${t}`, t, timeTool(t)]),
+    ['Any time signature…', 'n/d', () => { const t = askTime(); return t && timeTool(t)(); }],
+    ['Common time (C, 4/4)', '\u{1D134}', timeTool('4/4', 'C')], ['Alla breve / cut time (2/2)', '\u{1D135}', timeTool('2/2', 'cut')],
+    ['Metronome mark ♩ = …', '♩=', () => { const r = askNumber('Beats per minute', 120, 10, 400, 'bpm'); return r && mk('metronome', { unit: 'quarter', ...r })(); }],
+    ['Metronome mark 𝅗𝅥 = …', '𝅗𝅥=', () => { const r = askNumber('Beats per minute', 60, 10, 400, 'bpm'); return r && mk('metronome', { unit: 'half', ...r })(); }],
+    ['Metronome mark ♩. = …', '♩.=', () => { const r = askNumber('Beats per minute', 80, 10, 400, 'bpm'); return r && mk('metronome', { unit: 'quarter', dotted: true, ...r })(); }],
+  ],
+  'Note relationships': [
+    ['Tie', '‿', mk('tie')], ['Slur', '⌢', mk('slur')],
+    ['Glissando (wavy)', '〰', mk('gliss')], ['Glissando (straight, gliss.)', '╲', mk('gliss', { var: 'straight' })],
+    ['Triplet', '3', mk('tuplet', { num: 3, span: 2 })],
+    ['Tuplet (any number…)', 'n', () => { const r = askNumber('Tuplet number (e.g. 5, 6, 7)', 5, 2, 32, 'num'); return r && mk('tuplet', { ...r, span: r.num - 1 })(); }],
+    ['Arpeggiated chord', '⌇', mk('arpeggio')],
+    ['Chord (add notes to a note)', '\u{1D158}\u{1D158}', () => { toggleChord(true); return null; }],
+  ],
+  'Dynamics': [['Crescendo (hairpin)', '\u{1D192}', mk('cresc')], ['Diminuendo (hairpin)', '\u{1D193}', mk('dim')]],
+  'Octave signs': [['Ottava alta (8va)', '8va', mk('ottava', { var: '8va' })], ['Ottava bassa (8vb)', '8vb', mk('ottava', { var: '8vb' })],
+    ['Quindicesima alta (15ma)', '15ma', mk('ottava', { var: '15ma' })], ['Quindicesima bassa (15mb)', '15mb', mk('ottava', { var: '15mb' })]],
+  'Repetition, codas, and other direction symbols': [
+    ['Start repeat', '\u{1D106}', mk('repStart')], ['End repeat', '\u{1D107}', mk('repEnd')],
+    ['Simile (repeat one bar)', '\u{1D10E}', mk('simile1')], ['Simile (repeat two bars)', '\u{1D10F}', mk('simile2')],
+    ['First ending (volta 1.)', '1.', mk('volta', { text: '1.', span: 1 })], ['Second ending (volta 2.)', '2.', mk('volta', { text: '2.', span: 1, closed: false })],
+    ['Ending with any label…', '1.–2.', () => { const r = askText('Ending label', '1.–2.', 'text'); return r && mk('volta', { ...r, span: 1 })(); }],
+    ['Segno', '\u{1D10B}', mk('segno')], ['Coda', '\u{1D10C}', mk('coda')],
+    ...['D.C.', 'D.C. al Fine', 'D.C. al Coda', 'D.S.', 'D.S. al Fine', 'D.S. al Coda', 'Fine', 'To Coda'].map(t => [t, t, mk('dir', { text: t })]),
+    ['Direct (custos)', '⌇', mk('direct')],
+  ],
+  'Instrument-specific notation: Bowed string instruments': [
+    ['Left-hand pizzicato (+)', '+', mk('bow', { var: 'lh' })], ['Snap pizzicato', '⊙', mk('bow', { var: 'snap' })],
+    ['Natural harmonic', '○', mk('bow', { var: 'harmonic' })], ['Up bow', '\u{1D1AB}', mk('bow', { var: 'up' })], ['Down bow', '\u{1D1AA}', mk('bow', { var: 'down' })],
+    ['Con sordino', 'con sord.', mk('bow', { var: 'con' })], ['Senza sordino', 'senza sord.', mk('bow', { var: 'senza' })],
+  ],
+  'Instrument-specific notation: Pedal marks': [['Engage pedal (Ped.)', 'Ped.', mk('ped')], ['Release pedal (✱)', '✱', mk('ped', { var: 'up' })],
+    ['Pedal line (bracket)', '└┘', mk('pedline')]],
+};
+// images replaced by the drawn symbols above (or not needed: the stave and ledger lines are always drawn)
+const REPLACED = /\/(\d+px-)?(Music-staff\.svg|Music-ledger-edited\.png|Accolade\.svg|Staff-bracket\.jpg|Octaveclef\d?\.(jpg|svg)|Music-GClef2\.jpg|Music-(neutralclef|unpitchedclef|measurerest|timesig|commontime|cuttime|metronome|glissando|triplet|arpeggio|crescendo|diminuendo|repeat|simile|volte|dacapo|dalsegno|pizzicato|snappizzicato|harmonic|upbow|downbow|pedalup|pedal0|pedal)\.svg|Semigarrapatea\.svg|Silencio_de_semigarrapatea\.svg|Compound_duple_drum_pattern\.png|Five-four_time_signature\.png|Tie-music\.png|(One|Two)_octaves?_(up|down)\.jpg|SegnoTeken\.svg|Coda_sign\.svg|Direct_music_symbol.*\.png|Con_sordino\.svg|Senza_sordino\.svg|Pedal_Mark_1\.svg)$/;
+SYMBOL_GROUPS.forEach(g => {
+  g.items = g.items.filter(([, u]) => !REPLACED.test(u));
+  for (const [label, icon, pick] of NATIVE_LIB[g.name] || []) g.items.push([label, 'native', icon, pick]);
+});
 for (let i = SYMBOL_GROUPS.length - 1; i >= 0; i--) if (!SYMBOL_GROUPS[i].items.length) SYMBOL_GROUPS.splice(i, 1);
 // Text-based notation from the same page (fingerings, hand and organ manual abbreviations)
 SYMBOL_GROUPS.push(
@@ -413,6 +704,7 @@ const RULES = {"Music-staff.svg":{"anchor":"staffStart","where":"onStaff","hs":4
 "Music-pedal0.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.352,0.957,0.605]},
 "Music-pedal.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.35,0.956,0.606]}};
 let dotted = false; // place new notes/rests dotted
+let chordMode = false; // taps add notes to the selected (or last) note instead of adding a new one
 // Notes/rests get stable ids so library symbols can stay attached to them
 let lastId = 0;
 const newId = () => ++lastId;
@@ -460,16 +752,30 @@ function drawRest(g, durId, x) {
   }
 }
 
+// Stem direction and length for a note or chord (staff steps of its heads)
+const stemOf = (steps, d) => {
+  const up = steps.reduce((a, b) => a + b, 0) / steps.length >= 4;
+  return { up, len: 38 + Math.max(0, d.flags - 2) * 8 };
+};
+// Draws a note, or a chord when s is a list of staff steps: heads a second apart sit on opposite sides of the stem
 function drawNote(g, durId, x, s) {
-  const d = durOf(durId), y = yOf(s);
-  for (let l = -2; l >= s; l -= 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
-  for (let l = 10; l <= s; l += 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
-  el('ellipse', { cx: x, cy: y, rx: 7.6, ry: 5.4, transform: `rotate(-20 ${x} ${y})`,
-    fill: d.filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': d.filled ? 0 : 2.2 }, g);
-  if (d.id === 'breve') for (const bx of [-11, -13.5, 11, 13.5]) line(g, x + bx, y - 7, x + bx, y + 7, 1.4);
+  const d = durOf(durId), steps = [].concat(s).sort((a, b) => a - b), lo = steps[0], hi = steps[steps.length - 1];
+  const { up, len } = stemOf(steps, d);
+  for (let l = -2; l >= lo; l -= 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
+  for (let l = 10; l <= hi; l += 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
+  const order = up ? [...steps].reverse() : steps;
+  let prev = null, prevShift = false;
+  for (const st of order) {
+    const shift = prev !== null && Math.abs(st - prev) === 1 && !prevShift;
+    const hx = x + (shift ? (up ? 13.6 : -13.6) : 0), y = yOf(st);
+    el('ellipse', { cx: hx, cy: y, rx: 7.6, ry: 5.4, transform: `rotate(-20 ${hx} ${y})`,
+      fill: d.filled ? 'currentColor' : 'none', stroke: 'currentColor', 'stroke-width': d.filled ? 0 : 2.2 }, g);
+    if (d.id === 'breve') for (const bx of [-11, -13.5, 11, 13.5]) line(g, hx + bx, y - 7, hx + bx, y + 7, 1.4);
+    prev = st; prevShift = shift;
+  }
   if (!d.stem) return;
-  const len = 38 + Math.max(0, d.flags - 2) * 8;
-  const up = s >= 4, sx = up ? x + 6.8 : x - 6.8, sy2 = up ? y - len : y + len;
+  const y = up ? yOf(hi) : yOf(lo), yEnd = up ? yOf(lo) : yOf(hi);
+  const sx = up ? x + 6.8 : x - 6.8, sy2 = up ? yEnd - len : yEnd + len;
   line(g, sx, y + (up ? -1 : 1), sx, sy2, 1.6);
   for (let f = 0; f < d.flags; f++) {
     const fy = sy2 + (up ? f * 8 : -f * 8), dir = up ? 1 : -1;
@@ -482,9 +788,16 @@ function drawSymbol(g, kind, durId, x, s, dot) {
   if (kind === 'rest') drawRest(g, durId, x); else drawNote(g, durId, x, s);
   if (!dot) return;
   // the dot sits in a space: notes on a line move it up into the space above
-  const ds = kind === 'rest' ? 3 : s % 2 === 0 ? s - 1 : s;
-  el('circle', { cx: x + (durId === 'breve' ? 20 : 15), cy: yOf(ds), r: 2.6, fill: 'currentColor' }, g);
+  for (const st of kind === 'rest' ? [3] : [...new Set([].concat(s).map(v => v % 2 === 0 ? v - 1 : v))])
+    el('circle', { cx: x + (durId === 'breve' ? 20 : 15), cy: yOf(st), r: 2.6, fill: 'currentColor' }, g);
 }
+function drawMeasureRest(g, x, count) {
+  el('rect', { x: x - 34, y: yOf(3), width: 68, height: 2 * STEP, fill: 'currentColor' }, g);
+  line(g, x - 34, yOf(2), x - 34, yOf(6), 2); line(g, x + 34, yOf(2), x + 34, yOf(6), 2);
+  const t = el('text', { x, y: yOf(-1.2), 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 22, 'text-anchor': 'middle', fill: 'currentColor' }, g);
+  t.textContent = count || 4;
+}
+const pitchesOf = it => [it.p, ...(it.ch || [])];
 
 function repeatDots(g, x) {
   el('circle', { cx: x, cy: yOf(3), r: 2.4, fill: 'currentColor' }, g);
@@ -497,7 +810,7 @@ function layout(stave, minWidth) {
   let x = 66;
   const out = { items: [], bars: [], over: [], showTime: true };
   const si = state.staves.indexOf(stave), prev = state.staves[si - 1];
-  out.showTime = !prev || prev.time !== stave.time;
+  out.showTime = !prev || prev.time !== stave.time || prev.timeSym !== stave.timeSym;
   out.keyX = x - 2;
   if (stave.key) x += Math.abs(stave.key) * 10 + 8;
   out.timeX = x + 16;
@@ -506,16 +819,21 @@ function layout(stave, minWidth) {
   x += 14;
   let fill = 0, barStart = x - 14;
   out.musicStart = x - 6;
+  // repeat signs placed on inner barlines need room on their side of the barline
+  const repAt = d => new Set(stave.marks.filter(m => m.d === d).map(m => m.bar));
+  const repStart = repAt('repStart'), repEnd = repAt('repEnd');
   stave.items.forEach((it, ii) => {
-    out.items.push({ x: x + 6 });
+    out.items.push({ x: x + 6 + (it.dur === 'measure' ? itemAdv(it) / 2 - 12 : 0) });  // a bar rest sits in the middle of its bar
     x += itemAdv(it);
-    fill += itemVal(it);
+    fill += it.dur === 'measure' ? cap : itemVal(it);
     const last = ii === stave.items.length - 1;
     if (fill > cap + 1e-9) out.over.push([barStart, x]);
     if (fill >= cap - 1e-9 && !last) {
+      const bi = out.bars.length + 1;
+      if (repEnd.has(bi)) x += 16;
       out.bars.push(x + 2);
       barStart = x + 2;
-      x += 18;
+      x += 18 + (repStart.has(bi) ? 18 : 0);
       fill = 0;
     }
   });
@@ -531,8 +849,10 @@ function drawStave(svg, stave, si, L) {
   const W = L.width;
   svg.style.color = 'var(--line)';
   for (const [a, b] of L.over) el('rect', { x: a, y: yOf(-2), width: b - a, height: yOf(10) - yOf(-2), fill: 'var(--over)' }, svg);
-  for (let i = 0; i < 5; i++) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
-  line(svg, 10, yOf(0), 10, yOf(8), 1.5);
+  // a percussion clef "on a single-line staff" turns this stave into one line
+  const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : yOf(8);
+  for (let i = 0; i < 5; i++) if (!one || i === 2) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
+  line(svg, 10, T, 10, B, 1.5);
   const c = CLEFS[stave.clef];
   // a clef placed from the library takes the clef's place, so the built-in one is not drawn
   if (!stave.marks.some(isClefMark)) {
@@ -545,7 +865,11 @@ function drawStave(svg, stave, si, L) {
     const t = el('text', { x: L.keyX + i * 10, y: yOf(steps[i]) + (ks > 0 ? 7 : 3), 'font-family': 'Noto Music', 'font-size': 32, fill: 'currentColor' }, svg);
     t.textContent = ks > 0 ? '\u266F' : '\u266D';
   }
-  if (L.showTime) {
+  if (L.showTime && stave.timeSym) {
+    // common time (C) and cut time (alla breve)
+    const t = el('text', { x: L.timeX - 11, y: yOf(4) + 13, 'font-family': 'Noto Music', 'font-size': 40, fill: 'currentColor' }, svg);
+    t.textContent = stave.timeSym === 'C' ? '\u{1D134}' : '\u{1D135}';
+  } else if (L.showTime) {
     const [n, d] = stave.time.split('/');
     for (const [txt, base] of [[n, 4], [d, 8]]) {
       const t = el('text', { x: L.timeX, y: yOf(base) - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30,
@@ -554,17 +878,17 @@ function drawStave(svg, stave, si, L) {
     }
   }
   if (L.startX) {
-    el('rect', { x: L.startX, y: yOf(0), width: 4.5, height: yOf(8) - yOf(0), fill: 'currentColor' }, svg);
-    line(svg, L.startX + 8, yOf(0), L.startX + 8, yOf(8), 1.3);
+    el('rect', { x: L.startX, y: T, width: 4.5, height: B - T, fill: 'currentColor' }, svg);
+    line(svg, L.startX + 8, T, L.startX + 8, B, 1.3);
     repeatDots(svg, L.startX + 14);
   }
-  for (const bx of L.bars) line(svg, bx, yOf(0), bx, yOf(8), 1.3);
+  for (const bx of L.bars) line(svg, bx, T, bx, B, 1.3);
   const E = W - 10;
-  if (stave.end === 'single') line(svg, E, yOf(0), E, yOf(8), 1.5);
-  if (stave.end === 'double') { line(svg, E - 5, yOf(0), E - 5, yOf(8), 1.3); line(svg, E, yOf(0), E, yOf(8), 1.3); }
+  if (stave.end === 'single') line(svg, E, T, E, B, 1.5);
+  if (stave.end === 'double') { line(svg, E - 5, T, E - 5, B, 1.3); line(svg, E, T, E, B, 1.3); }
   if (stave.end === 'final' || stave.end === 'repeat') {
-    line(svg, E - 8, yOf(0), E - 8, yOf(8), 1.3);
-    el('rect', { x: E - 4.5, y: yOf(0), width: 4.5, height: yOf(8) - yOf(0), fill: 'currentColor' }, svg);
+    line(svg, E - 8, T, E - 8, B, 1.3);
+    el('rect', { x: E - 4.5, y: T, width: 4.5, height: B - T, fill: 'currentColor' }, svg);
     if (stave.end === 'repeat') repeatDots(svg, E - 14);
   }
 }
@@ -577,26 +901,40 @@ function render() {
   const sx = [...host.querySelectorAll('.scroller')].map(s => s.scrollLeft);
   host.innerHTML = '';
   const minWidth = Math.max(320, host.clientWidth - 2);
+  const joins = [];
+  let prevWrap = null;
   state.staves.forEach((stave, si) => {
-    const wrap = document.createElement('div');
-    wrap.className = 'stave-wrap';
+    // a brace or bracket joins a stave to the one below it: both go in one card with the sign down the left
+    const joined = si > 0 && state.staves[si - 1].join && prevWrap;
+    const wrap = joined ? prevWrap : document.createElement('div');
+    if (!joined) wrap.className = 'stave-wrap';
+    if (stave.join && si < state.staves.length - 1) { wrap.classList.add('joined'); joins.push({ wrap, kind: stave.join, si }); }
+    prevWrap = wrap;
     const head = document.createElement('div');
     head.className = 'stave-head';
     const opts = (o, v) => Object.entries(o).map(([k, n]) => `<option value="${k}"${k === v ? ' selected' : ''}>${n}</option>`).join('');
     head.innerHTML = `<span class="num">${si + 1}</span>
       <select data-k="clef" aria-label="Clef">${opts(Object.fromEntries(Object.entries(CLEFS).map(([k, c]) => [k, c.name + ' clef'])), stave.clef)}</select>
       <select data-k="key" aria-label="Key signature">${KEYS.map(([k, n]) => `<option value="${k}"${k === (stave.key || 0) ? ' selected' : ''}>${n}</option>`).join('')}</select>
-      <select data-k="time" aria-label="Time signature">${opts(Object.fromEntries(TIMES.map(t => [t, t])), stave.time)}</select>
+      <select data-k="time" aria-label="Time signature">${opts(Object.fromEntries([...new Set([...TIMES, stave.time])].map(t => [t, t]).concat([['C', 'C (common)'], ['cut', '\u00A2 (cut)'], ['custom', 'Other…']])),
+        stave.timeSym || stave.time)}</select>
       <select data-k="startRepeat" aria-label="Start of line">${opts({ false: 'Plain start', true: 'Left repeat' }, String(stave.startRepeat))}</select>
       <select data-k="end" aria-label="End of line">${opts(ENDS, stave.end)}</select>`;
     head.querySelectorAll('select').forEach(s => s.onchange = () => commit(() => {
       const k = s.dataset.k;
+      if (k === 'time') {
+        if (s.value === 'C') { stave.time = '4/4'; stave.timeSym = 'C'; }
+        else if (s.value === 'cut') { stave.time = '2/2'; stave.timeSym = 'cut'; }
+        else if (s.value === 'custom') { const t = askTime(stave.time); if (t) { stave.time = t; stave.timeSym = null; } }
+        else { stave.time = s.value; stave.timeSym = null; }
+        return;
+      }
       stave[k] = k === 'startRepeat' ? s.value === 'true' : k === 'key' ? +s.value : s.value;
     }));
     if (state.staves.length > 1) {
       const rm = document.createElement('button');
       rm.className = 'remove'; rm.title = 'Remove this stave'; rm.textContent = '×';
-      rm.onclick = () => { sel = null; commit(() => state.staves.splice(si, 1)); };
+      rm.onclick = () => { sel = selMark = null; commit(() => state.staves.splice(si, 1)); };
       head.appendChild(rm);
     }
     wrap.appendChild(head);
@@ -606,12 +944,25 @@ function render() {
     const svg = el('svg', { viewBox: `0 0 ${L.width} ${H}`, width: L.width, height: H, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
     drawStave(svg, stave, si, L);
 
+    // what the drawn symbols need to know about this stave
+    const E = {
+      stave, L, barXs: [L.musicStart - 8, ...L.bars, L.width - 10],
+      nextFirst: state.staves[si + 1]?.items.find(it => it.kind === 'note')?.p,
+      idx: m => m.a != null ? stave.items.findIndex(it => it.id === m.a) : -1,
+      note(ii) {
+        const it = stave.items[ii], x = L.items[ii].x;
+        if (it.kind === 'rest') return { x, ys: [yOf(4)], y: yOf(4), top: yOf(1), bot: yOf(7), up: false };
+        const d = durOf(it.dur), steps = pitchesOf(it).map(p => pitchToStep(stave.clef, p)), ys = steps.map(yOf), { up, len } = stemOf(steps, d);
+        return { x, ys, y: ys[0], up, top: Math.min(...ys) - (d.stem && up ? len : 7), bot: Math.max(...ys) + (d.stem && !up ? len : 7) };
+      },
+    };
     stave.items.forEach((it, ii) => {
-      const x = L.items[ii].x, s = it.kind === 'rest' ? 4 : pitchToStep(stave.clef, it.p);
+      const x = L.items[ii].x, steps = it.kind === 'rest' ? [4] : pitchesOf(it).map(p => pitchToStep(stave.clef, p));
       const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : '') }, svg);
-      drawSymbol(g, it.kind, it.dur, x, s, it.dot);
-      const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(s) - 8, yOf(s) + 8];
-      el('rect', { x: x - 13, y: ys[0], width: 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
+      if (it.dur === 'measure') drawMeasureRest(g, x, it.count);
+      else drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot);
+      const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
+      el('rect', { x: x - (it.dur === 'measure' ? 36 : 13), y: ys[0], width: it.dur === 'measure' ? 72 : 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
       g.addEventListener('contextmenu', e => { e.preventDefault(); removeItem(si, ii); });
@@ -633,14 +984,32 @@ function render() {
       }
       const ii = m.a != null ? stave.items.findIndex(it => it.id === m.a) : -1;
       if (ii < 0) return { ax: m.x ?? 80, noteY: yOf(4), noteTop: yOf(0), noteBot: yOf(8), stemUp: false, nextX: (m.x ?? 80) + 60 };
-      const it = stave.items[ii], ax = L.items[ii].x, nextX = L.items[ii + 1]?.x ?? ax + 60;
-      if (it.kind === 'rest') return { ax, noteY: yOf(4), noteTop: yOf(1), noteBot: yOf(7), stemUp: false, nextX };
-      const s = pitchToStep(stave.clef, it.p), noteY = yOf(s), stemUp = s >= 4, stem = durOf(it.dur).stem;
-      return { ax, noteY, stemUp, nextX, noteTop: noteY - (stem && stemUp ? 40 : 7), noteBot: noteY + (stem && !stemUp ? 40 : 7) };
+      const n = E.note(ii), nextX = L.items[ii + 1]?.x ?? n.x + 60;
+      return { ax: n.x, noteY: n.ys[m.pi] ?? n.y, stemUp: n.up, nextX, noteTop: n.top, noteBot: n.bot };
     };
     // where a tap or drag attaches a symbol
+    const nearestNote = p => {
+      let best = -1, bd = 70;
+      L.items.forEach((li, ii) => { const d = Math.abs(li.x - p.x); if (d < bd) { bd = d; best = ii; } });
+      return best;
+    };
     const snap = (sym, p) => {
+      if (sym.d) {
+        const a = NATIVE[sym.d]?.anchor;
+        if (a === 'bar') { let k = 0; E.barXs.forEach((bx, i) => { if (Math.abs(bx - p.x) < Math.abs(E.barXs[k] - p.x)) k = i; }); return { bar: k }; }
+        if (a === 'barMid') { let k = 0; E.barXs.forEach((bx, i) => { if (bx <= p.x && i < E.barXs.length - 1) k = i; }); return { bar: k }; }
+        if (a === 'note') { const b = nearestNote(p); return b >= 0 ? { a: stave.items[b].id } : { a: null, x: Math.round(p.x) }; }
+        return {};
+      }
       const r = markRule(sym);
+      if (r.anchor === 'note' && r.where === 'left') {
+        // accidentals go on the head of the chord nearest the tap
+        const b = nearestNote(p);
+        if (b < 0) return { a: null, x: Math.round(p.x) };
+        const ys = E.note(b).ys;
+        let pi = 0; ys.forEach((y, i) => { if (Math.abs(y - p.y) < Math.abs(ys[pi] - p.y)) pi = i; });
+        return { a: stave.items[b].id, x: L.items[b].x, pi };
+      }
       if (r.anchor !== 'note') return { a: null, x: Math.round(p.x) };
       let best = -1, bd = 70;
       L.items.forEach((li, ii) => { const d = Math.abs(li.x - p.x); if (d < bd) { bd = d; best = ii; } });
@@ -658,8 +1027,14 @@ function render() {
     };
     stave.marks.forEach((m, mi) => {
       const g = el('g', { class: 'mark' + (selMark && selMark.si === si && selMark.mi === mi ? ' sel' : '') }, svg);
-      const geo = stacked({ ...placed(m), rule: markRule(m) });
-      drawMark(g, m, geo);
+      let geo;
+      if (m.d) {
+        geo = (NATIVE[m.d] && NATIVE[m.d].draw(g, m, E)) || { x: 0, y: 0, w: 0, h: 0 };
+        el('rect', { class: 'box', x: geo.x - 4, y: geo.y - 4, width: geo.w + 8, height: geo.h + 8, fill: 'transparent', rx: 3 }, g);
+      } else {
+        geo = stacked({ ...placed(m), rule: markRule(m) });
+        drawMark(g, m, geo);
+      }
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
       g.addEventListener('contextmenu', e => { e.preventDefault(); removeMark(si, mi); });
@@ -671,14 +1046,15 @@ function render() {
         let dx = 0, dy = 0;
         g.onpointermove = ev => {
           dx = ev.clientX - x0; dy = ev.clientY - y0;
-          const t = placed({ ...m, ...snap(m, { x: cx + dx, y: 0 }) });
+          if (m.d) return g.setAttribute('transform', `translate(${dx} 0)`);
+          const t = placed({ ...m, ...snap(m, { x: cx + dx, y: geo.y + geo.h / 2 + dy }) });
           g.setAttribute('transform', `translate(${t.x - geo.x} ${t.y - geo.y})`);
         };
         g.onpointerup = () => {
           g.onpointermove = g.onpointerup = null;
           if (Math.abs(dx) + Math.abs(dy) > 3) {
             selMark = { si, mi }; sel = null;
-            return commit(() => Object.assign(m, snap(m, { x: cx + dx, y: 0 })));
+            return commit(() => Object.assign(m, snap(m, { x: cx + dx, y: geo.y + geo.h / 2 + dy })));
           }
           if (tool.kind === 'erase') return removeMark(si, mi);
           selMark = selMark && selMark.si === si && selMark.mi === mi ? null : { si, mi };
@@ -700,7 +1076,12 @@ function render() {
     const showGhost = e => {
       ghost.innerHTML = '';
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
-      if (tool.kind === 'mark') { const m = { ...tool.sym, ...snap(tool.sym, svgPoint(e)) }; return drawMark(ghost, m, placed(m)); }
+      if (tool.kind === 'stave') return;
+      if (tool.kind === 'mark') {
+        const m = { ...tool.sym, ...snap(tool.sym, svgPoint(e)) };
+        return m.d ? NATIVE[m.d].draw(ghost, m, E) : drawMark(ghost, m, placed(m));
+      }
+      if (tool.dur === 'measure') return drawMeasureRest(ghost, insX + 70, tool.count);
       const s = stepAt(e);
       drawSymbol(ghost, tool.kind, tool.dur, insX, s, dotted);
       if (tool.kind === 'note') {
@@ -717,6 +1098,13 @@ function render() {
       if (!down) return;
       down = false;
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
+      if (tool.kind === 'stave') { sel = selMark = null; return commit(() => tool.apply(stave)); }
+      if (tool.kind === 'mark' && (tool.sym.d === 'repStart' || tool.sym.d === 'repEnd')) {
+        // repeats at the very start/end of a line use the stave's own start/end barline
+        const { bar } = snap(tool.sym, svgPoint(e));
+        if (tool.sym.d === 'repStart' && bar === 0) return commit(() => stave.startRepeat = true);
+        if (tool.sym.d === 'repEnd' && bar === E.barXs.length - 1) return commit(() => stave.end = 'repeat');
+      }
       if (tool.kind === 'mark') {
         selMark = { si, mi: stave.marks.length }; sel = null;
         return commit(() => {
@@ -724,13 +1112,31 @@ function render() {
           if (isClefMark(tool.sym)) {
             stave.marks = stave.marks.filter(m => !isClefMark(m));
             selMark = { si, mi: stave.marks.length };
-            stave.clef = CLEF_OF[tool.sym.n] || stave.clef;
+            stave.clef = CLEF_OF[tool.sym.n] || (tool.sym.var ? { G: 'treble', F: 'bass' }[tool.sym.var[0]] : null) || stave.clef;
+            stave.lines = tool.sym.var === 'single' ? 1 : 5;
           }
           stave.marks.push({ ...tool.sym, ...snap(tool.sym, svgPoint(e)) });
         });
       }
+      if (chordMode && tool.kind === 'note') {
+        // chord mode: tapping adds (or removes) a note on the selected note, or on the last note of this stave
+        let t = sel && sel.si === si ? sel.ii : -1;
+        if (t < 0) for (let i = stave.items.length - 1; i >= 0; i--) if (stave.items[i].kind === 'note') { t = i; break; }
+        const it = stave.items[t];
+        if (it && it.kind === 'note') {
+          const p = stepToPitch(stave.clef, stepAt(e));
+          sel = { si, ii: t }; selMark = null;
+          return commit(() => {
+            const all = pitchesOf(it);
+            const next = all.includes(p) ? (all.length > 1 ? all.filter(q => q !== p) : all) : [...all, p];
+            it.p = next[0]; it.ch = next.slice(1);
+            if (!it.ch.length) delete it.ch;
+          });
+        }
+      }
       const item = { kind: tool.kind, dur: tool.dur, id: newId() };
-      if (dotted) item.dot = true;
+      if (tool.count) item.count = tool.count;
+      if (dotted && tool.dur !== 'measure') item.dot = true;
       if (tool.kind === 'note') item.p = stepToPitch(stave.clef, stepAt(e));
       reveal = { si, x: insX + itemAdv(item) + 40 };
       commit(() => stave.items.splice(insAt, 0, item));
@@ -746,14 +1152,29 @@ function render() {
     if (reveal && reveal.si === si && reveal.x > scroller.scrollLeft + scroller.clientWidth)
       scroller.scrollLeft = reveal.x - scroller.clientWidth;
   });
+  for (const j of joins) {
+    const svgs = j.wrap.querySelectorAll('svg.stave'), a = svgs[0], b = svgs[svgs.length - 1];
+    if (!a || a === b) continue;
+    const wr = j.wrap.getBoundingClientRect(), top = a.getBoundingClientRect().top - wr.top + yOf(0), bot = b.getBoundingClientRect().top - wr.top + yOf(8), h = bot - top;
+    const o = el('svg', { class: 'join', width: 22, height: h, viewBox: `0 0 22 ${h}` });
+    o.style.top = top + 'px';
+    if (j.kind === 'brace') el('path', { d: `M18 0 C2 ${h * 0.05} 15 ${h * 0.44} 2 ${h / 2} C15 ${h * 0.56} 2 ${h * 0.95} 18 ${h} C10 ${h * 0.9} 21 ${h * 0.58} 8 ${h / 2} C21 ${h * 0.42} 10 ${h * 0.1} 18 0Z`, fill: 'currentColor' }, o);
+    else { el('rect', { x: 8, y: -2, width: 5, height: h + 4, fill: 'currentColor' }, o); el('path', { d: `M8 -2 Q16 -2 21 -9 M8 ${h + 2} Q16 ${h + 2} 21 ${h + 9}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4 }, o); }
+    line(o, 21.5, 0, 21.5, h, 1.5);
+    j.wrap.appendChild(o);
+  }
   reveal = null;
   document.getElementById('undo').disabled = !past.length;
   document.getElementById('redo').disabled = !future.length;
   document.getElementById('clear').disabled = state.staves.every(s => !s.items.length && !s.marks.length) && state.staves.length === 1;
   document.getElementById('selGroup').hidden = !sel && !selMark;
-  document.getElementById('selSmaller').hidden = document.getElementById('selBigger').hidden = !selMark;
+  const sm = selMark && state.staves[selMark.si]?.marks[selMark.mi], spec = sm && sm.d && NATIVE[sm.d];
+  document.getElementById('selSmaller').hidden = document.getElementById('selBigger').hidden = !sm || !!sm.d;
+  document.getElementById('selShorter').hidden = document.getElementById('selLonger').hidden = !(spec && spec.span != null);
   const selItem = sel && state.staves[sel.si]?.items[sel.ii];
-  document.getElementById('selUp').disabled = document.getElementById('selDown').disabled = !selMark && (!selItem || selItem.kind === 'rest');
+  document.getElementById('selEdit').hidden = !((spec && spec.edit) || (selItem && selItem.dur === 'measure'));
+  document.getElementById('selUp').disabled = document.getElementById('selDown').disabled = sm ? !!sm.d : (!selItem || selItem.kind === 'rest');
+  document.getElementById('chordTool')?.setAttribute('aria-pressed', chordMode);
 }
 
 // Where a library symbol goes, from its rule and its anchor (c: anchor x, notehead y/extent, stem direction, next note x).
@@ -796,7 +1217,7 @@ function finishGeom(r, c, geo, off) {
 const TEXT_RULE = { anchor: 'note', where: 'above', hs: 1.3 };
 const SLUR_RULE = { anchor: 'note', where: 'betweenNotes', hs: 0.9 };
 const CLEF_URLS = new Set(SYMBOL_GROUPS.find(g => g.name === 'Clefs').items.map(i => i[1]));
-const isClefMark = m => !!m.u && CLEF_URLS.has(m.u);
+const isClefMark = m => m.d === 'clef' || (!!m.u && CLEF_URLS.has(m.u));
 const CLEF_OF = { 'G clef (Treble clef)': 'treble', 'Alto clef (C clef)': 'alto', 'Tenor clef': 'tenor', 'F clef (Bass clef)': 'bass' };
 const markRule = m => m.d ? SLUR_RULE : m.t ? TEXT_RULE : RULES[m.u.split('/').pop().replace(/^\d+px-/, '')] || { anchor: 'note', where: 'above', hs: 2 };
 
@@ -821,7 +1242,29 @@ function drawMark(g, m, geo) {
 
 function removeMark(si, mi) {
   selMark = null;
-  commit(() => state.staves[si].marks.splice(mi, 1));
+  commit(() => {
+    const st = state.staves[si], [gone] = st.marks.splice(mi, 1);
+    if (gone && gone.var === 'single') st.lines = 5;
+  });
+}
+function editSelected() {
+  const it = sel && state.staves[sel.si]?.items[sel.ii];
+  if (it && it.dur === 'measure') { const r = askNumber('How many bars of rest?', it.count || 4, 2, 999, 'count'); return r && commit(() => it.count = r.count); }
+  const m = selMark && state.staves[selMark.si]?.marks[selMark.mi], spec = m && m.d && NATIVE[m.d];
+  if (!spec || !spec.edit) return;
+  const patch = spec.edit(m);
+  if (patch) commit(() => { Object.assign(m, patch); if (m.d === 'tuplet' && patch.num) m.span = patch.num - 1; });
+}
+function spanSelected(delta) {
+  const m = selMark && state.staves[selMark.si]?.marks[selMark.mi], spec = m && m.d && NATIVE[m.d];
+  if (!spec || spec.span == null) return;
+  commit(() => m.span = Math.max(1, Math.min(64, (m.span ?? spec.span) + delta)));
+}
+function toggleChord(on) {
+  chordMode = on ?? !chordMode;
+  if (chordMode && tool.kind !== 'note') setTool({ kind: 'note', dur: 'quarter' });
+  document.getElementById('chordTool').setAttribute('aria-pressed', chordMode);
+  if (chordMode) toast('Chord mode: tap the stave to add notes to the selected (or last) note. Tap a note\'s pitch again to remove it.');
 }
 function resizeMark(f) {
   const m = selMark && state.staves[selMark.si]?.marks[selMark.mi];
@@ -847,13 +1290,23 @@ function buildLibrary() {
       b.className = 'sym-btn';
       b.title = name;
       b.dataset.search = (name + ' ' + grp.name).toLowerCase();
-      const sym = u === 'draw:slur' ? { d: 'slur', n: name } : grp.text ? { t: u, n: name, g: grp.name } : { u, n: name, iw, ih };
-      if (grp.text) b.innerHTML = '<div class="txt"></div><span class="lbl"></span>';
+      const native = u === 'native';
+      const sym = grp.text ? { t: u, n: name, g: grp.name } : { u, n: name, iw, ih };
+      if (grp.text || native) b.innerHTML = '<div class="txt"></div><span class="lbl"></span>';
       else b.innerHTML = `<img loading="lazy" alt=""><span class="lbl"></span>`;
-      if (sym.d) b.querySelector('img').outerHTML = '<svg viewBox="0 0 40 30" style="width:100%;height:40px"><path d="M4 20 Q20 4 36 20 Q20 8 4 20Z" fill="currentColor"/></svg>';
+      if (native) { const t = b.querySelector('.txt'); t.textContent = iw; t.classList.add('glyph'); }
       else if (grp.text) b.querySelector('.txt').textContent = u; else b.querySelector('img').src = imgUrl(u);
       b.querySelector('.lbl').textContent = name;
       b.onclick = () => {
+        if (native) {
+          if (tool.btn === b) { setTool({ kind: 'note', dur: 'quarter' }); return; }
+          const t = ih();
+          if (!t) return;
+          setTool({ ...t, btn: b, ...(t.sym ? { sym: { ...t.sym, n: name } } : {}) });
+          if (matchMedia('(max-width: 900px)').matches) document.getElementById('library').classList.remove('open');
+          if (t.kind === 'stave') toast('Now tap the stave to apply it.');
+          return;
+        }
         setTool(tool.kind === 'mark' && tool.btn === b ? { kind: 'note', dur: 'quarter' } : { kind: 'mark', sym, btn: b });
         if (matchMedia('(max-width: 900px)').matches) document.getElementById('library').classList.remove('open');
       };
@@ -892,7 +1345,7 @@ function nudge(delta) {
   if (!it || it.kind === 'rest') return;
   const st = state.staves[sel.si], s = pitchToStep(st.clef, it.p) - delta;
   if (s < MIN_STEP || s > MAX_STEP) return;
-  commit(() => it.p += delta);
+  commit(() => { it.p += delta; if (it.ch) it.ch = it.ch.map(q => q + delta); });
 }
 
 function buildPalette() {
@@ -900,8 +1353,8 @@ function buildPalette() {
     const b = document.createElement('button');
     b.className = 'tool'; b.dataset.kind = kind; b.dataset.dur = d.id;
     b.title = `${d.name} ${kind} (${kind === 'rest' ? 'Shift+' : ''}${i + 1})`;
-    const deep = d.flags >= 3;
-    const svg = el('svg', { viewBox: kind === 'rest' ? (deep ? '-17 34 34 64' : '-15 42 30 46') : (deep ? '-18 14 36 74' : '-15 40 30 52') });
+    const deep = d.flags >= 3, deeper = d.flags >= 5;
+    const svg = el('svg', { viewBox: kind === 'rest' ? (deeper ? '-18 24 36 80' : deep ? '-17 34 34 64' : '-15 42 30 46') : (deeper ? '-20 0 40 92' : deep ? '-18 14 36 74' : '-15 40 30 52') });
     drawSymbol(svg, kind, d.id, 0, 4);
     b.appendChild(svg);
     b.onclick = () => setTool({ kind, dur: d.id });
@@ -914,12 +1367,20 @@ function buildPalette() {
   dot.innerHTML = '<svg viewBox="-15 40 30 52"><circle cx="0" cy="66" r="4" fill="currentColor"/></svg>';
   dot.onclick = toggleDot;
   document.getElementById('notes').appendChild(dot);
+  const chord = document.createElement('button');
+  chord.className = 'tool'; chord.id = 'chordTool'; chord.title = 'Chord mode (C) – tapping adds notes to the selected or last note';
+  chord.setAttribute('aria-pressed', false);
+  chord.innerHTML = '<svg viewBox="-15 40 30 52"></svg>';
+  drawNote(chord.querySelector('svg'), 'quarter', 0, [4, 6, 8]);
+  chord.querySelector('svg').setAttribute('viewBox', '-15 50 30 52');
+  chord.onclick = () => toggleChord();
+  document.getElementById('notes').appendChild(chord);
   DURS.forEach((d, i) => make('rest', d, i));
 }
 function setTool(t) {
   tool = t;
   document.querySelectorAll('.tool').forEach(b => {
-    if (b.id === 'dotTool') return;
+    if (b.id === 'dotTool' || b.id === 'chordTool') return;
     const on = b.id === 'eraser' ? t.kind === 'erase' : b.dataset.kind === t.kind && b.dataset.dur === t.dur;
     b.setAttribute('aria-pressed', on);
   });
@@ -941,6 +1402,9 @@ document.getElementById('undo').onclick = undo;
 document.getElementById('redo').onclick = redo;
 document.getElementById('selUp').onclick = () => selMark ? moveMark(-1) : nudge(1);
 document.getElementById('selDown').onclick = () => selMark ? moveMark(1) : nudge(-1);
+document.getElementById('selEdit').onclick = editSelected;
+document.getElementById('selShorter').onclick = () => spanSelected(-1);
+document.getElementById('selLonger').onclick = () => spanSelected(1);
 document.getElementById('selSmaller').onclick = () => resizeMark(1 / 1.2);
 document.getElementById('selBigger').onclick = () => resizeMark(1.2);
 document.getElementById('selDel').onclick = () => selMark ? removeMark(selMark.si, selMark.mi) : sel && removeItem(sel.si, sel.ii);
@@ -961,6 +1425,8 @@ document.addEventListener('keydown', e => {
   if (selMark) {
     if (e.key === 'ArrowUp') { e.preventDefault(); return moveMark(-1); }
     if (e.key === 'ArrowDown') { e.preventDefault(); return moveMark(1); }
+    if (e.key === '[') return spanSelected(-1);
+    if (e.key === ']') return spanSelected(1);
     if (e.key === '-') return resizeMark(1 / 1.2);
     if (e.key === '+' || e.key === '=') return resizeMark(1.2);
     if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); return removeMark(selMark.si, selMark.mi); }
@@ -978,6 +1444,7 @@ document.addEventListener('keydown', e => {
   const n = parseInt(e.code.replace('Digit', ''), 10);
   if (n >= 1 && n <= DURS.length) setTool({ kind: e.shiftKey ? 'rest' : 'note', dur: DURS[n - 1].id });
   if (e.key === '.') toggleDot();
+  if (e.key.toLowerCase() === 'c') toggleChord();
   if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
 });
 // Keep the tool bar usable while pinch-zoomed: pin it (and an open symbol sheet) to the visible area and undo the zoom on it
