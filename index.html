@@ -341,6 +341,17 @@ function wavy(g, x0, y0, x1, y1, amp = 3, period = 7) {
   }
   el('path', { d, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }, g);
 }
+// notes under a beam that have tails (quavers and shorter)
+function beamed(m, E) {
+  const a = E.idx(m);
+  if (a < 0) return [];
+  const out = [];
+  for (let i = a; i <= Math.min(E.stave.items.length - 1, a + (m.span ?? 1)); i++) {
+    const it = E.stave.items[i], d = durOf(it.dur);
+    if (it.kind === 'note' && d.flags) out.push({ i, x: E.L.items[i].x, flags: d.flags, steps: pitchesOf(it).map(p => pitchToStep(E.stave.clef, p)) });
+  }
+  return out;
+}
 const barX = (m, E) => E.barXs[Math.max(0, Math.min(E.barXs.length - 1, m.bar ?? 0))];
 
 const NATIVE = {
@@ -375,6 +386,29 @@ const NATIVE = {
     el('path', { d: `M${x0} ${y + h} L${x0} ${y} L${mid - 9} ${y} M${mid + 9} ${y} L${x1} ${y} L${x1} ${y + h}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.3 }, g);
     txt(g, mid, y + 5, String(m.num || 3), { size: 14 });
     return box(x0, y - 8, x1, y + 8);
+  } },
+  beam: { anchor: 'note', span: 1, draw(g, m, E) {
+    const notes = beamed(m, E);
+    if (notes.length < 2) { const s = spanOf(m, E, 1); return s && box(s.A.x - 8, s.A.top, s.B.x + 8, s.A.top + 6); }
+    // one stem direction for the group; stems end on a straight beam that clears every head by a stem's length
+    const all = notes.flatMap(n => n.steps), up = all.reduce((a, b) => a + b, 0) / all.length >= 4, dir = up ? -1 : 1;
+    const sx = n => n.x + (up ? 6.8 : -6.8), far = n => up ? yOf(Math.min(...n.steps)) : yOf(Math.max(...n.steps));
+    const A = notes[0], B = notes[notes.length - 1], slope = Math.max(-0.25, Math.min(0.25, (far(B) - far(A)) / (sx(B) - sx(A) || 1))) * 0.5;
+    let y0 = far(A) + dir * 36;
+    for (const n of notes) { const need = far(n) + dir * 30 - slope * (sx(n) - sx(A)); y0 = up ? Math.min(y0, need) : Math.max(y0, need); }
+    const yAt = x => y0 + slope * (x - sx(A));
+    for (const n of notes) line(g, sx(n), up ? yOf(Math.max(...n.steps)) : yOf(Math.min(...n.steps)), sx(n), yAt(sx(n)), 1.6);
+    const bar = (x0, x1, k) => el('path', { d: `M${x0} ${yAt(x0) - dir * k * 8} L${x1} ${yAt(x1) - dir * k * 8} L${x1} ${yAt(x1) - dir * (k * 8 + 5)} L${x0} ${yAt(x0) - dir * (k * 8 + 5)} Z`, fill: 'currentColor' }, g);
+    // first beam joins them all; each further beam joins neighbours that both have that many tails, or is a short stub
+    const most = Math.max(...notes.map(n => n.flags));
+    for (let k = 0; k < most; k++) notes.forEach((n, i) => {
+      if (n.flags <= k) return;
+      const next = notes[i + 1], prev = notes[i - 1];
+      if (next && next.flags > k) bar(sx(n), sx(next), k);
+      else if (!(prev && prev.flags > k)) bar(...(next ? [sx(n), sx(n) + 9] : [sx(n) - 9, sx(n)]), k);
+    });
+    const ys = notes.map(n => yAt(sx(n)));
+    return box(sx(A), Math.min(...ys) - 6, sx(B), Math.max(...ys) + 6);
   } },
   arpeggio: { anchor: 'note', draw(g, m, E) {
     const i = E.idx(m); if (i < 0) return null;
@@ -564,6 +598,7 @@ const NATIVE_LIB = {
     ['Tuplet (any number…)', 'n', () => { const r = askNumber('Tuplet number (e.g. 5, 6, 7)', 5, 2, 32, 'num'); return r && mk('tuplet', { ...r, span: r.num - 1 })(); }],
     ['Arpeggiated chord', '⌇', mk('arpeggio')],
     ['Chord (add notes to a note)', '\u{1D158}\u{1D158}', () => { toggleChord(true); return null; }],
+    ['Beam (join tails of quavers and shorter)', '\u266B', mk('beam', { span: 1 })],
   ],
   'Dynamics': [['Crescendo (hairpin)', '\u{1D192}', mk('cresc')], ['Diminuendo (hairpin)', '\u{1D193}', mk('dim')]],
   'Octave signs': [['Ottava alta (8va)', '8va', mk('ottava', { var: '8va' })], ['Ottava bassa (8vb)', '8vb', mk('ottava', { var: '8vb' })],
@@ -777,7 +812,7 @@ const stemOf = (steps, d) => {
   return { up, len: 38 + Math.max(0, d.flags - 2) * 8 };
 };
 // Draws a note, or a chord when s is a list of staff steps: heads a second apart sit on opposite sides of the stem
-function drawNote(g, durId, x, s) {
+function drawNote(g, durId, x, s, bare) {
   const d = durOf(durId), steps = [].concat(s).sort((a, b) => a - b), lo = steps[0], hi = steps[steps.length - 1];
   const { up, len } = stemOf(steps, d);
   for (let l = -2; l >= lo; l -= 2) line(g, x - 13, yOf(l), x + 13, yOf(l), 1.4);
@@ -792,7 +827,7 @@ function drawNote(g, durId, x, s) {
     if (d.id === 'breve') for (const bx of [-11, -13.5, 11, 13.5]) line(g, hx + bx, y - 7, hx + bx, y + 7, 1.4);
     prev = st; prevShift = shift;
   }
-  if (!d.stem) return;
+  if (!d.stem || bare) return;
   const y = up ? yOf(hi) : yOf(lo), yEnd = up ? yOf(lo) : yOf(hi);
   const sx = up ? x + 6.8 : x - 6.8, sy2 = up ? yEnd - len : yEnd + len;
   line(g, sx, y + (up ? -1 : 1), sx, sy2, 1.6);
@@ -803,8 +838,8 @@ function drawNote(g, durId, x, s) {
   }
 }
 
-function drawSymbol(g, kind, durId, x, s, dot) {
-  if (kind === 'rest') drawRest(g, durId, x); else drawNote(g, durId, x, s);
+function drawSymbol(g, kind, durId, x, s, dot, bare) {
+  if (kind === 'rest') drawRest(g, durId, x); else drawNote(g, durId, x, s, bare);
   if (!dot) return;
   // the dot sits in a space: notes on a line move it up into the space above
   for (const st of kind === 'rest' ? [3] : [...new Set([].concat(s).map(v => v % 2 === 0 ? v - 1 : v))])
@@ -975,11 +1010,12 @@ function render() {
         return { x, ys, y: ys[0], up, top: Math.min(...ys) - (d.stem && up ? len : 7), bot: Math.max(...ys) + (d.stem && !up ? len : 7) };
       },
     };
+    const beamedIdx = new Set(stave.marks.filter(m => m.d === 'beam').flatMap(m => { const b = beamed(m, E); return b.length > 1 ? b.map(n => n.i) : []; }));
     stave.items.forEach((it, ii) => {
       const x = L.items[ii].x, steps = it.kind === 'rest' ? [4] : pitchesOf(it).map(p => pitchToStep(stave.clef, p));
       const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : ''), 'data-si': si, 'data-ii': ii }, svg);
       if (it.dur === 'measure') drawMeasureRest(g, x, it.count);
-      else drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot);
+      else drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot, beamedIdx.has(ii));
       const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
       el('rect', { x: x - (it.dur === 'measure' ? 36 : 13), y: ys[0], width: it.dur === 'measure' ? 72 : 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
@@ -1698,7 +1734,7 @@ const LANG = (() => {
       });
       for (let t of toks) {
         // groups may be glued on: 3*C4 D4 E4*
-        const opener = t.match(/^(\d{1,2}|8va|8vb|15va|15vb|PDLI|V\([^)]*\))\*(.*)$/u);
+        const opener = t.match(/^(\d{1,2}|8va|8vb|15va|15vb|PDLI|TAIL|V\([^)]*\))\*(.*)$/u);
         if (opener) { open.push({ kind: opener[1], items: [] }); if (!opener[2]) continue; t = opener[2]; }
         let closes = 0;
         while (t.endsWith('*') && t !== '*' && !readPitches(t) && !readPitches(t.replace(/^(N\d+|N\/\d+)\.?/u, ''))) { t = t.slice(0, -1); closes++; }
@@ -1756,6 +1792,7 @@ const LANG = (() => {
         if (/^\d+$/.test(kind)) st.marks.push(nat('tuplet', { num: Math.max(2, +kind), span, a: first.id }));
         else if (own(OTT, kind)) st.marks.push(nat('ottava', { var: OTT[kind], span, a: first.id }));
         else if (kind === 'PDLI') st.marks.push(nat('pedline', { span, a: first.id }));
+        else if (kind === 'TAIL') st.marks.push(nat('beam', { span, a: first.id }));
         else {
           const label = kind.slice(2, -1), bar0 = barAt(st.items.indexOf(first)), bar1 = barAt(st.items.indexOf(g.items[span]));
           const t = /^\d+$/.test(label) ? label + '.' : label;
@@ -1792,9 +1829,9 @@ const LANG = (() => {
         else if (m.d === 'direct') bars[n].push('DIRC');
         else if ((c = codeOf(BARS, m)) && !(m.u && i >= 0)) bars[m.u ? posOfBar(barXs.reduce((b, x, k) => Math.abs(x - (m.x ?? 0)) < Math.abs(barXs[b] - (m.x ?? 0)) ? k : b, 0)) : posOfBar(m.bar ?? 0)].push(c);
         else if (i < 0) continue;  // not attached to anything
-        else if (m.d === 'tuplet' || m.d === 'ottava' || m.d === 'pedline') {
+        else if (m.d === 'tuplet' || m.d === 'ottava' || m.d === 'pedline' || m.d === 'beam') {
           const b = Math.min(n - 1, i + (m.span ?? NATIVE[m.d].span));
-          opens[i].push((m.d === 'tuplet' ? m.num || 3 : m.d === 'pedline' ? 'PDLI' : Object.keys(OTT).find(k => OTT[k] === m.var)) + '*'); closes[b].push('*');
+          opens[i].push((m.d === 'tuplet' ? m.num || 3 : m.d === 'pedline' ? 'PDLI' : m.d === 'beam' ? 'TAIL' : Object.keys(OTT).find(k => OTT[k] === m.var)) + '*'); closes[b].push('*');
         } else if (Object.values(LINKS).includes(m.d)) {
           const w = m.d === 'gliss' ? (m.var === 'straight' ? 'GLSS' : 'GLSW') : Object.keys(LINKS).find(k => LINKS[k] === m.d);
           links[i].push(w + (m.span != null && m.span !== NATIVE[m.d].span ? `(${m.span})` : ''));
