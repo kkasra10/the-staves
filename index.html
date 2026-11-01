@@ -65,7 +65,7 @@
   .add-stave:hover { border-color: var(--accent); color: var(--accent); }
   .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; line-height: 1.8; }
   kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--paper); }
-  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+  .toast { position: fixed; bottom: 20px; left: 0; right: 0; margin: 0 auto; width: max-content; max-width: calc(100% - 32px); transform-origin: 0 100%; background: var(--ink); color: var(--bg);
     padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; z-index: 10; }
   .toast button { background: none; border: none; color: var(--accent); font-weight: 700; cursor: pointer; font-size: 14px; }
 
@@ -100,6 +100,7 @@
   .sym-btn .txt.glyph { font: 400 22px 'Noto Music', Georgia, serif; white-space: nowrap; overflow: hidden; max-width: 100%; }
   .stave-wrap { position: relative; }
   .stave-wrap.joined .scroller { margin-left: 22px; }
+  .stave-wrap.joined .stave-head { padding-left: 34px; }
   .stave-wrap svg.join { position: absolute; left: 2px; color: var(--line); overflow: visible; pointer-events: none; }
   .sym-btn span.lbl { font-size: 8.5px; line-height: 1.15; color: #7a746a; text-align: center; overflow: hidden;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; width: 100%; }
@@ -133,9 +134,11 @@
     .tool { width: 42px; height: 46px; }
     .btn { height: 46px; padding: 0 12px; }
     .hint .desk { display: none; }
-    .stave-head { position: relative; gap: 6px; padding: 6px 36px 6px 8px; }
+    .stave-head { position: relative; gap: 6px; padding: 6px 0 6px 8px; }
     .stave-head select { font-size: 12px; padding: 4px; }
-    .stave-head .remove { position: absolute; top: 4px; right: 2px; }
+    .stave-head .remove { position: sticky; right: 0; margin-left: auto; flex-shrink: 0; background: var(--paper); }
+    .stave-head { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .stave-head select { flex-shrink: 0; }
     .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
     aside.library { bottom: calc(63px + env(safe-area-inset-bottom)); height: 58vh; }
   }
@@ -704,6 +707,8 @@ const RULES = {"Music-staff.svg":{"anchor":"staffStart","where":"onStaff","hs":4
 "Music-pedal0.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.352,0.957,0.605]},
 "Music-pedal.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.35,0.956,0.606]}};
 let dotted = false; // place new notes/rests dotted
+let lastPointer = 'mouse'; // touch long-presses also fire contextmenu, which must not delete
+addEventListener('pointerdown', e => lastPointer = e.pointerType, true);
 let chordMode = false; // taps add notes to the selected (or last) note instead of adding a new one
 // Notes/rests get stable ids so library symbols can stay attached to them
 let lastId = 0;
@@ -729,6 +734,7 @@ function el(tag, attrs = {}, parent) {
   return e;
 }
 const yOf = s => TOP + s * STEP;
+const PAD = matchMedia('(pointer: coarse)').matches ? 10 : 4;  // grab margin around drawn symbols
 const line = (g, x1, y1, x2, y2, w = 1.3) => el('line', { x1, y1, x2, y2, stroke: 'currentColor', 'stroke-width': w }, g);
 
 // Rests are drawn as shapes so their position on the staff is exact, independent of font metrics.
@@ -965,7 +971,7 @@ function render() {
       el('rect', { x: x - (it.dur === 'measure' ? 36 : 13), y: ys[0], width: it.dur === 'measure' ? 72 : 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
-      g.addEventListener('contextmenu', e => { e.preventDefault(); removeItem(si, ii); });
+      g.addEventListener('contextmenu', e => { e.preventDefault(); if (lastPointer === 'mouse') removeItem(si, ii); });
       g.addEventListener('click', e => {
         e.stopPropagation();
         if (tool.kind === 'erase') return removeItem(si, ii);
@@ -1030,14 +1036,14 @@ function render() {
       let geo;
       if (m.d) {
         geo = (NATIVE[m.d] && NATIVE[m.d].draw(g, m, E)) || { x: 0, y: 0, w: 0, h: 0 };
-        el('rect', { class: 'box', x: geo.x - 4, y: geo.y - 4, width: geo.w + 8, height: geo.h + 8, fill: 'transparent', rx: 3 }, g);
+        el('rect', { class: 'box', x: geo.x - PAD, y: geo.y - PAD, width: geo.w + 2 * PAD, height: geo.h + 2 * PAD, fill: 'transparent', rx: 3 }, g);
       } else {
         geo = stacked({ ...placed(m), rule: markRule(m) });
         drawMark(g, m, geo);
       }
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
-      g.addEventListener('contextmenu', e => { e.preventDefault(); removeMark(si, mi); });
+      g.addEventListener('contextmenu', e => { e.preventDefault(); if (lastPointer === 'mouse') removeMark(si, mi); });
       // drag sideways to re-attach to another note (height is set by the symbol's rule); a tap selects (or erases)
       g.addEventListener('pointerdown', e => {
         e.stopPropagation();
@@ -1453,8 +1459,8 @@ function pinToVisible() {
   const zoomed = vv && vv.scale > 1.02;
   document.body.classList.toggle('zoomed', !!zoomed);
   const bar = document.querySelector('.toolbar'), lib = document.getElementById('library');
-  for (const [node, b] of [[bar, 0], [lib, 66]]) {
-    node.classList.toggle('pinned', !!zoomed);
+  for (const [node, b] of [[bar, 0], [lib, 66], [document.getElementById('toast'), 80]]) {
+    if (node.id !== 'toast') node.classList.toggle('pinned', !!zoomed);
     if (!zoomed) { node.style.transform = ''; continue; }
     const k = 1 / vv.scale, layoutH = document.documentElement.clientHeight;
     const ty = vv.offsetTop + vv.height - layoutH + b - b * k;
