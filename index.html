@@ -44,6 +44,9 @@
     color: var(--ink); font: 600 14px Inter, sans-serif; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
   .btn:hover:not(:disabled) { border-color: var(--accent); }
   .btn:disabled { opacity: .4; cursor: default; }
+  .btn.play { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.play.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  svg.stave .item.playing { color: var(--accent); }
   .btn.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; color: #fff; }
   .spacer { flex: 1; }
   #selGroup[hidden] { display: none; }
@@ -206,6 +209,7 @@
     <button class="btn" id="selDel" title="Delete (Backspace)">Delete</button>
   </div>
   <div class="spacer"></div>
+  <button class="btn play" id="play" title="Play the music (Space)">▶ Play</button>
   <button class="btn" id="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
   <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
@@ -964,7 +968,7 @@ function render() {
     };
     stave.items.forEach((it, ii) => {
       const x = L.items[ii].x, steps = it.kind === 'rest' ? [4] : pitchesOf(it).map(p => pitchToStep(stave.clef, p));
-      const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : '') }, svg);
+      const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : ''), 'data-si': si, 'data-ii': ii }, svg);
       if (it.dur === 'measure') drawMeasureRest(g, x, it.count);
       else drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot);
       const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
@@ -1428,6 +1432,7 @@ document.addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
   if (mod) return;
+  if (e.key === ' ') { e.preventDefault(); return startPlayback(); }
   if (selMark) {
     if (e.key === 'ArrowUp') { e.preventDefault(); return moveMark(-1); }
     if (e.key === 'ArrowDown') { e.preventDefault(); return moveMark(1); }
@@ -1473,6 +1478,115 @@ if (vv) { vv.addEventListener('resize', schedulePin); vv.addEventListener('scrol
 addEventListener('scroll', schedulePin, { passive: true });
 let rw;
 addEventListener('resize', () => { clearTimeout(rw); rw = setTimeout(render, 120); });
+
+// ---------- Playback: turns the staves into timed MIDI note numbers and plays them on a small built-in synth ----------
+const SEMIS = [0, 2, 4, 5, 7, 9, 11];
+const SHARP_ORDER = [3, 0, 4, 1, 5, 2, 6], FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3];  // F C G D A E B / B E A D G C F
+const keyAlter = (key, letter) => key > 0 ? (SHARP_ORDER.slice(0, key).includes(letter) ? 1 : 0) : key < 0 ? (FLAT_ORDER.slice(0, -key).includes(letter) ? -1 : 0) : 0;
+// library accidentals (semitones; microtones as fractions)
+const ACCIDENTAL = { 'Music-sharp.svg': 1, 'Music-flat.svg': -1, 'Music-natural.svg': 0, 'Music-doubleflat.svg': -2, 'Music-doublesharp3.svg': 2,
+  'Music-demiflat.svg': -0.5, 'Music-flat2.jpg': -0.5, 'Music-sesquiflat.svg': -1.5, 'Music-doubleflat2.jpg': -1.5, 'Music-demisharp.svg': 0.5, 'Music-sesquisharp.svg': 1.5 };
+const fileOf = u => u.split('/').pop().replace(/^\d+px-/, '');
+const OTTAVA = { '8va': 12, '8vb': -12, '15ma': 24, '15mb': -24 };
+const CLEF_SHIFT = { G8vb: -12, F8vb: -12, G8va: 12, F8va: 12, G15mb: -24, G15ma: 24 };
+
+// One stave as events: start time and length in whole notes, MIDI numbers (chords have several)
+function staveEvents(st) {
+  const [n, d] = st.time.split('/').map(Number), cap = n / d, items = st.items, marks = st.marks || [];
+  const shift = items.map(() => CLEF_SHIFT[marks.find(m => m.d === 'clef')?.var] || 0);
+  for (const m of marks) if (m.d === 'ottava') {
+    const a = items.findIndex(it => it.id === m.a);
+    if (a >= 0) for (let i = a; i <= Math.min(items.length - 1, a + (m.span ?? 2)); i++) shift[i] += OTTAVA[m.var] || 0;
+  }
+  const accs = {}, ties = new Set(marks.filter(m => m.d === 'tie').map(m => m.a));
+  for (const m of marks) if (m.u && fileOf(m.u) in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[fileOf(m.u)] });
+  const events = [];
+  let t = 0, fill = 0, carry = {};
+  items.forEach((it, ii) => {
+    const dur = it.dur === 'measure' ? cap * (it.count || 4) : itemVal(it);
+    if (it.kind === 'note') {
+      const midis = pitchesOf(it).map((p, pi) => {
+        const letter = ((p % 7) + 7) % 7, acc = accs[it.id]?.find(a => a.pi === pi);
+        let alter;
+        if (acc) carry[p] = alter = acc.alter;           // an accidental lasts to the end of the bar
+        else alter = p in carry ? carry[p] : keyAlter(st.key || 0, letter);
+        return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + alter + shift[ii];
+      });
+      events.push({ t, dur, midis, ii, tie: ties.has(it.id) });
+    } else events.push({ t, dur, midis: [], ii });
+    t += dur;
+    fill += it.dur === 'measure' ? cap : dur;
+    if (fill >= cap - 1e-9) { fill = 0; carry = {}; }
+  });
+  // a tie joins a note to the next one of the same pitch: one longer sound
+  for (let i = 0; i < events.length - 1; i++) {
+    const a = events[i], b = events[i + 1];
+    if (a.tie && b.midis.length && b.midis.join() === a.midis.join()) { a.dur += b.dur; b.silent = true; }
+  }
+  return { events, length: t };
+}
+
+let player = null;
+function stopPlayback() {
+  if (!player) return;
+  player.timers.forEach(clearTimeout);
+  player.ctx.close();
+  player = null;
+  document.querySelectorAll('svg.stave .item.playing').forEach(g => g.classList.remove('playing'));
+  const b = document.getElementById('play');
+  b.textContent = '▶ Play'; b.classList.remove('on');
+}
+function startPlayback() {
+  if (player) return stopPlayback();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return toast('This browser cannot play audio.');
+  // tempo from the first metronome mark, else 100 crotchets a minute
+  const mm = state.staves.flatMap(s => s.marks || []).find(m => m.d === 'metronome');
+  const beat = mm ? (mm.unit === 'half' ? 0.5 : 0.25) * (mm.dotted ? 1.5 : 1) : 0.25, bpm = mm?.bpm || 100;
+  const secPerWhole = 60 / bpm / beat;
+  const ctx = new AC(), out = ctx.createDynamicsCompressor(), master = ctx.createGain();
+  master.gain.value = 0.35; master.connect(out); out.connect(ctx.destination);
+  player = { ctx, timers: [] };
+  const b = document.getElementById('play');
+  b.textContent = '■ Stop'; b.classList.add('on');
+  const t0 = ctx.currentTime + 0.12;
+  const voice = (midi, at, dur, vol) => {
+    const f = 440 * Math.pow(2, (midi - 69) / 12), g = ctx.createGain(), o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain();
+    o1.type = 'triangle'; o1.frequency.value = f; o2.type = 'sine'; o2.frequency.value = f * 2; g2.gain.value = 0.25;
+    o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(master);
+    const end = at + Math.max(0.05, dur - 0.02);
+    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(vol, at + 0.012);
+    g.gain.exponentialRampToValueAtTime(vol * 0.45, at + 0.35); g.gain.setValueAtTime(vol * 0.45, end);
+    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18);
+    for (const o of [o1, o2]) { o.start(at); o.stop(end + 0.2); }
+  };
+  const glow = (si, ii, at, dur) => {
+    const ms = (at - ctx.currentTime) * 1000;
+    player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.add('playing'), ms));
+    player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.remove('playing'), ms + dur * 1000 - 30));
+  };
+  // staves joined by a brace or bracket play together; otherwise each one follows the last
+  let cursor = t0, si = 0;
+  while (si < state.staves.length) {
+    let last = si;
+    while (state.staves[last].join && last + 1 < state.staves.length) last++;
+    let len = 0;
+    for (let k = si; k <= last; k++) {
+      const { events, length } = staveEvents(state.staves[k]);
+      len = Math.max(len, length);
+      for (const e of events) {
+        const at = cursor + e.t * secPerWhole, dur = e.dur * secPerWhole;
+        if (!e.silent) e.midis.forEach(m => voice(m, at, dur, 0.5 / Math.sqrt(e.midis.length)));
+        glow(k, e.ii, at, e.silent ? 0 : dur);
+      }
+    }
+    cursor += len * secPerWhole;
+    si = last + 1;
+  }
+  if (cursor === t0) { stopPlayback(); return toast('Add some notes first.'); }
+  player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 300));
+}
+document.getElementById('play').onclick = startPlayback;
 
 buildPalette();
 buildLibrary();
