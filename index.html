@@ -218,6 +218,9 @@
   <button class="btn" id="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
   <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
+  <button class="btn" id="saveFile" title="Download this score as a file">⬇ Save</button>
+  <button class="btn" id="openFile" title="Open a score file">⬆ Open</button>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
 </div>
 
 <div class="layout">
@@ -1602,6 +1605,89 @@ function startPlayback() {
   if (cursor === t0) { stopPlayback(); return toast('Add some notes first.'); }
   player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 300));
 }
+// ---------- Saving and opening scores. Each format turns the score into text and back; more formats can be added here ----------
+const FORMATS = {
+  json: {
+    ext: 'json', mime: 'application/json',
+    write: st => JSON.stringify({ app: 'THE-Staves', version: 1, staves: st.staves }, null, 2),
+    read: text => JSON.parse(text),
+  },
+};
+// Uploaded files are untrusted: keep only known fields with sensible values
+const own = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);  // ignores inherited names like __proto__
+const int = (v, lo, hi, def) => Number.isInteger(v) && v >= lo && v <= hi ? v : def;
+const num = (v, lo, hi, def) => typeof v === 'number' && isFinite(v) && v >= lo && v <= hi ? v : def;
+const str = (v, max) => typeof v === 'string' ? v.slice(0, max) : undefined;
+const IMG_PATH = /^(commons|en)\/[\w./%()\-]+$|^https:\/\/(upload|thumb)\.wikimedia\.org\/[\w./%()\-]+$/;
+function cleanMark(m) {
+  if (!m || typeof m !== 'object') return null;
+  const o = {};
+  if (own(NATIVE, m.d)) o.d = m.d;
+  else if (typeof m.u === 'string' && IMG_PATH.test(m.u)) { o.u = m.u; o.iw = num(m.iw, 1, 1e5, 100); o.ih = num(m.ih, 1, 1e5, 100); }
+  else if (typeof m.t === 'string') o.t = m.t.slice(0, 20);
+  else return null;
+  const ints = { a: [0, 1e9], pi: [0, 20], span: [0, 64], bar: [0, 999], num: [2, 32], bpm: [10, 400] };
+  for (const k in ints) if (m[k] != null) { const v = int(m[k], ...ints[k], undefined); if (v !== undefined) o[k] = v; }
+  for (const k of ['x', 'off', 'k']) if (m[k] != null) { const v = num(m[k], -5000, 5000, undefined); if (v !== undefined) o[k] = v; }
+  for (const [k, max] of [['n', 80], ['var', 12], ['text', 40]]) if (m[k] != null) o[k] = str(m[k], max);
+  if (m.unit === 'half' || m.unit === 'quarter') o.unit = m.unit;
+  for (const k of ['dotted', 'closed']) if (typeof m[k] === 'boolean') o[k] = m[k];
+  return o;
+}
+function cleanScore(data) {
+  if (!data || !Array.isArray(data.staves) || !data.staves.length) throw new Error('No staves in this file.');
+  return { staves: data.staves.slice(0, 200).map(st => {
+    if (!st || typeof st !== 'object') st = {};
+    const items = (Array.isArray(st.items) ? st.items : []).slice(0, 5000).filter(it => it && (it.kind === 'note' || it.kind === 'rest') && durOf(it.dur))
+      .map(it => {
+        const o = { kind: it.kind, dur: it.dur };
+        if (Number.isInteger(it.id) && it.id > 0) o.id = it.id;
+        if (it.kind === 'note') {
+          o.p = int(it.p, -10, 80, 34);
+          const ch = (Array.isArray(it.ch) ? it.ch : []).filter(q => Number.isInteger(q) && q >= -10 && q <= 80 && q !== o.p).slice(0, 12);
+          if (ch.length) o.ch = [...new Set(ch)];
+        }
+        if (it.dot === true && it.dur !== 'measure') o.dot = true;
+        if (it.dur === 'measure') o.count = int(it.count, 1, 999, 4);
+        return o;
+      });
+    return {
+      clef: own(CLEFS, st.clef) ? st.clef : 'treble', key: int(st.key, -7, 7, 0),
+      time: typeof st.time === 'string' && /^\d{1,2}\/(1|2|4|8|16|32|64)$/.test(st.time) && +st.time.split('/')[0] > 0 ? st.time : '4/4',
+      timeSym: st.timeSym === 'C' || st.timeSym === 'cut' ? st.timeSym : null,
+      startRepeat: st.startRepeat === true, end: own(ENDS, st.end) ? st.end : 'single',
+      join: st.join === 'brace' || st.join === 'bracket' ? st.join : null, lines: st.lines === 1 ? 1 : 5,
+      items, marks: (Array.isArray(st.marks) ? st.marks : []).slice(0, 5000).map(cleanMark).filter(Boolean),
+    };
+  }) };
+}
+function saveScore(fmt = 'json') {
+  const F = FORMATS[fmt], blob = new Blob([F.write(state)], { type: F.mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `score.${F.ext}`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function openScore(file) {
+  if (!file) return;
+  if (file.size > 5e6) return toast('That file is too big (over 5 MB).');
+  const fmt = Object.keys(FORMATS).find(k => file.name.toLowerCase().endsWith('.' + FORMATS[k].ext)) || 'json';
+  file.text().then(text => {
+    let next;
+    try { next = cleanScore(FORMATS[fmt].read(text)); }
+    catch (err) { return toast(`Could not open ${file.name}: ${err.message}`); }
+    sel = selMark = null;
+    commit(() => state = next);
+    toast(`Opened ${file.name}.`);
+  });
+}
+document.getElementById('saveFile').onclick = () => saveScore('json');
+document.getElementById('openFile').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange = e => { openScore(e.target.files[0]); e.target.value = ''; };
+// dropping a file anywhere on the page opens it too
+addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
+addEventListener('drop', e => { if (e.dataTransfer?.files.length) { e.preventDefault(); openScore(e.dataTransfer.files[0]); } });
 document.getElementById('play').onclick = startPlayback;
 document.getElementById('tempo').onchange = e => {
   const v = Math.round(+e.target.value);
