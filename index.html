@@ -97,7 +97,8 @@
   svg.stave .mark { cursor: grab; touch-action: none; }
   svg.stave .mark .box { fill: none; stroke: none; }
   svg.stave .mark.sel .box, svg.stave .mark.hot .box { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; }
-  @media (prefers-color-scheme: dark) { svg.stave .mark image { filter: invert(1) hue-rotate(180deg); } }
+  svg.stave .mark image { mix-blend-mode: multiply; }  /* drops the white backgrounds of the JPG/PNG symbols */
+  @media (prefers-color-scheme: dark) { svg.stave .mark image { filter: invert(1) hue-rotate(180deg); mix-blend-mode: screen; } }
 
   @media (max-width: 900px) {
     .layout { display: block; }
@@ -161,7 +162,7 @@
     Bars fill up and split automatically from the time signature; overfull bars are tinted red. Tap a symbol to select it.
     <span class="desk"><br><kbd>1</kbd>–<kbd>9</kbd> breve…128th notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> rests · <kbd>.</kbd> dot · <kbd>↑</kbd><kbd>↓</kbd> change pitch ·
     <kbd>←</kbd><kbd>→</kbd> move selection · <kbd>⌫</kbd> delete · <kbd>E</kbd> eraser · <kbd>⌘/Ctrl Z</kbd> undo</span>
-    <br>Library symbols snap onto the nearest note or rest (and move with it) and onto staff lines and spaces: pick one, tap where it goes, drag to move, A−/A+ to resize.</p>
+    <br>Library symbols go where notation puts them: accidentals before the note, dynamics and pedal marks below, fermatas and ornaments above, clefs and signatures on the stave. Tap near a note to attach one; drag sideways to move it; ▲▼ nudge, A−/A+ resize.</p>
 </main>
 <aside class="library" id="library">
   <div class="lib-head">Symbols <span class="count" id="libCount"></span><button class="close" id="libClose" aria-label="Close">×</button></div>
@@ -198,6 +199,15 @@ const CLEFS = {
   alto:   { name: 'Alto',   top: 32, glyph: '\u{1D121}', at: 8.6 },
   tenor:  { name: 'Tenor',  top: 30, glyph: '\u{1D121}', at: 6.6 },
 };
+// Key signatures: number of sharps (+) or flats (-); staff steps for each accidental in order, per clef [sharps, flats]
+const KEYS = [...Array(15)].map((_, i) => i - 7).map(k => [k, k === 0 ? 'C maj / A min' :
+  `${Math.abs(k)}${k > 0 ? '\u266F' : '\u266D'} ${(k > 0 ? ['G', 'D', 'A', 'E', 'B', 'F\u266F', 'C\u266F'] : ['F', 'B\u266D', 'E\u266D', 'A\u266D', 'D\u266D', 'G\u266D', 'C\u266D'])[Math.abs(k) - 1]} maj`]);
+const KEY_STEPS = {
+  treble: [[0, 3, -1, 2, 5, 1, 4], [4, 1, 5, 2, 6, 3, 7]],
+  bass:   [[2, 5, 1, 4, 7, 3, 6], [6, 3, 7, 4, 8, 5, 9]],
+  alto:   [[1, 4, 0, 3, 6, 2, 5], [5, 2, 6, 3, 7, 4, 8]],
+  tenor:  [[6, 2, 5, 1, 4, 0, 3], [3, 0, 4, 1, 5, 2, 6]],
+};
 const TIMES = ['4/4', '3/4', '2/4', '2/2', '6/8', '3/8', '9/8', '12/8', '5/4'];
 const ENDS = { single: 'Single bar', double: 'Double bar', final: 'Final bar', repeat: 'Right repeat' };
 const pitchName = p => 'CDEFGAB'[((p % 7) + 7) % 7] + Math.floor(p / 7);
@@ -222,7 +232,12 @@ const SYMBOL_GROUPS = [{"name":"Lines","items":[["Staff/stave","commons/2/20/Mus
 const imgUrl = u => u.startsWith('http') ? u : 'https://upload.wikimedia.org/wikipedia/' + u;
 // Note and rest images that the built-in palette already provides (breve to 128th, plus dotted) are left out of the library
 const BUILT_IN = /\/(Music-(doublewhole|whole|half|quarter|eighth|sixteenth|thirtysecond|sixtyfourth|hundredtwentyeighth)(note|rest)|Crochet2|Sixtyfourth-note|Music-dotnote)\.svg$|\/(250px-)?Dotted_quarter_rest\.png$/;
-SYMBOL_GROUPS.forEach(g => g.items = g.items.filter(([, u]) => !BUILT_IN.test(u)));
+// Images that are worked examples (several notes, charts, demos) rather than one placeable symbol are left out too;
+// key signatures and slurs are drawn by the app instead (Key dropdown per stave, drawn slur below)
+const EXAMPLES = /\/(\d+px-)?(Key-Signatures-(flats|sharps)\.svg|Septimal_minor_third_on_C\.png|Notation_of_partials_1-19_for_1-1\.png|Compound_duple_drum_pattern\.png|Music-(triad|tremolo|appoggiatura|acciaccatura|beam|slur|legato)\.svg|Music_Tremolo_shortcut\.jpg|Four_sixteenth_notes\.png)$/;
+SYMBOL_GROUPS.forEach(g => g.items = g.items.filter(([, u]) => !BUILT_IN.test(u) && !EXAMPLES.test(u)));
+SYMBOL_GROUPS.find(g => g.name === 'Note relationships').items.splice(1, 0, ['Slur', 'draw:slur']);
+for (let i = SYMBOL_GROUPS.length - 1; i >= 0; i--) if (!SYMBOL_GROUPS[i].items.length) SYMBOL_GROUPS.splice(i, 1);
 // Text-based notation from the same page (fingerings, hand and organ manual abbreviations)
 SYMBOL_GROUPS.push(
   { name: 'Fingering', text: true, items: ['0', '1', '2', '3', '4', '5', '6', '+', 'T', 'ϙ', 'p', 'i', 'm', 'a', 'c', 'x', 'e', 'q'].map(t => [t, t]) },
@@ -230,13 +245,126 @@ SYMBOL_GROUPS.push(
   { name: 'Organ manuals', text: true, items: ['Gt.', 'Sw.', 'Ch.', 'Ped.', 'So.', 'Orch.', 'Ant.', 'Echo.', 'Pos.'].map(t => [t, t]) },
 );
 
-const newStave = from => ({ clef: from?.clef || 'treble', time: from?.time || '4/4', startRepeat: false, end: 'single', items: [], marks: [] });
+const newStave = from => ({ clef: from?.clef || 'treble', key: from?.key || 0, time: from?.time || '4/4', startRepeat: false, end: 'single', items: [], marks: [] });
 let state = load() || { staves: [newStave()] };
 let past = [], future = [];
 let tool = { kind: 'note', dur: 'quarter' };
 let sel = null; // { si, ii }
 let selMark = null; // { si, mi }: selected library symbol
 let reveal = null; // { si, x }: scroll this stave so x is visible after the next render
+// Placement rules per library image, from the article text and measurements of each image (staff = where its own stave lines sit)
+const RULES = {"Music-staff.svg":{"anchor":"staffStart","where":"onStaff","hs":4,"step":4.0,"staff":[0.019,0.979],"ink":[0,0.019,1,0.979]},
+"Music-ledger-edited.png":{"anchor":"note","where":"onStaff","hs":6.1,"step":3.9,"staff":[0.182,0.829],"ink":[0.4,0.003,0.619,0.995]},
+"Music-bar.svg":{"anchor":"barline","where":"onStaff","hs":4,"step":4.0,"staff":[0.019,0.979],"ink":[0.49,0.019,0.509,0.979]},
+"Music-doublebar.svg":{"anchor":"barline","where":"onStaff","hs":4,"step":4.0,"staff":[0.019,0.979],"ink":[0.46,0.019,0.539,0.979]},
+"Music-endbar.svg":{"anchor":"barline","where":"onStaff","hs":4,"step":4.0,"staff":[0.019,0.979],"ink":[0.88,0.019,0.996,0.979]},
+"Music-dottedbar.svg":{"anchor":"barline","where":"onStaff","hs":4,"step":4.0,"staff":[0.019,0.979],"ink":[0.49,0.09,0.509,0.908]},
+"Accolade.svg":{"anchor":"staffStart","where":"onStaff","hs":12,"step":11.8,"staff":[0.143,0.428],"ink":[0.057,0.139,0.237,0.991]},
+"Staff-bracket.jpg":{"anchor":"staffStart","where":"onStaff","hs":16.5,"step":13.5,"staff":[0.141,0.353],"ink":[0.327,0.059,0.637,0.936]},
+"Music-GClef.svg":{"anchor":"staffStart","where":"onStaff","hs":6.9,"step":4.3,"staff":[0.258,0.738],"ink":[0.358,0.101,0.648,0.928]},
+"Alto-clef.svg":{"anchor":"staffStart","where":"onStaff","hs":3.9,"step":4.0,"staff":[0.066,0.883],"ink":[0.163,0.077,0.488,0.872]},
+"Tenor-clef.svg":{"anchor":"staffStart","where":"onStaff","hs":4,"step":1.9,"staff":[0.235,0.961],"ink":[0.171,0.045,0.498,0.772]},
+"Music-Fclef.svg":{"anchor":"staffStart","where":"onStaff","hs":3.15,"step":3.2,"staff":[0.019,0.979],"ink":[0.338,0.023,0.669,0.78]},
+"Octaveclef3.jpg":{"anchor":"staffStart","where":"onStaff","hs":8,"step":3.3,"staff":[0.306,0.794],"ink":[0.299,0.018,0.658,0.996]},
+"Octaveclef4.jpg":{"anchor":"staffStart","where":"onStaff","hs":7.95,"step":3.4,"staff":[0.306,0.794],"ink":[0.299,0.025,0.658,0.996]},
+"Octaveclef.svg":{"anchor":"staffStart","where":"onStaff","hs":7.8,"step":5.4,"staff":[0.173,0.663],"ink":[0.306,0.023,0.664,0.979]},
+"Octaveclef5.jpg":{"anchor":"staffStart","where":"onStaff","hs":7.95,"step":5.5,"staff":[0.173,0.662],"ink":[0.305,0.023,0.663,0.995]},
+"Music-GClef2.jpg":{"anchor":"staffStart","where":"onStaff","hs":6.9,"step":4.2,"staff":[0.257,0.739],"ink":[0.105,0.1,0.734,0.926]},
+"Music-neutralclef.svg":{"anchor":"staffStart","where":"onStaff","hs":3.4,"step":4.0,"staff":[0.019,0.979],"ink":[0.19,0.09,0.809,0.908]},
+"Music-unpitchedclef.svg":{"anchor":"staffStart","where":"onStaff","hs":3.4,"step":4,"ink":[0.19,0.09,0.809,0.908]},
+"Music-TabClef.svg":{"anchor":"staffStart","where":"onStaff","hs":4.7,"step":4.0,"staff":[0.258,0.738],"ink":[0.433,0.221,0.569,0.781]},
+"Music-octwholenote.svg":{"anchor":"note","where":"onHead","hs":4,"staff":[0.019,0.979],"ink":[0.248,0.02,0.619,0.978]},
+"Maxima_rest.svg":{"anchor":"note","where":"onStaff","hs":2,"step":4,"ink":[0.278,0.211,0.721,0.787]},
+"Music-quadwholenote.svg":{"anchor":"note","where":"onHead","hs":4,"staff":[0.019,0.979],"ink":[0.38,0.02,0.619,0.978]},
+"Music-quadwholerest.svg":{"anchor":"note","where":"onStaff","hs":2,"step":4.0,"staff":[0.019,0.979],"ink":[0.429,0.241,0.568,0.757]},
+"Semigarrapatea.svg":{"anchor":"note","where":"onHead","hs":6.75,"staff":[0.364,0.844],"ink":[0.425,0.033,0.694,0.843]},
+"Silencio_de_semigarrapatea.svg":{"anchor":"note","where":"onStaff","hs":6.65,"step":3.2,"staff":[0.259,0.739],"ink":[0.365,0.05,0.658,0.849]},
+"Music-beam.svg":{"anchor":"note","where":"onStaff","hs":4,"step":3.9,"staff":[0.259,0.739],"ink":[0.094,0.255,0.911,0.733]},
+"Four_sixteenth_notes.png":{"anchor":"note","where":"onStaff","hs":4.1,"step":4.0,"staff":[0.202,0.804],"ink":[0.09,0.195,0.883,0.81]},
+"Quarter_not_with_%22X%22_notehead.svg":{"anchor":"note","where":"onHead","hs":3.9,"staff":[0.091,0.917],"ink":[0.356,0.103,0.544,0.905]},
+"Music-measurerest.svg":{"anchor":"note","where":"onStaff","hs":4.4,"step":1.6,"staff":[0.319,0.987],"ink":[0.049,0.085,0.949,0.822]},
+"Music-breath.svg":{"anchor":"note","where":"onStaff","hs":1.1,"step":-1.4,"staff":[0.235,0.889],"ink":[0.445,0.025,0.521,0.209]},
+"Music-caesura.svg":{"anchor":"note","where":"onStaff","hs":1.85,"step":-0.2,"staff":[0.235,0.889],"ink":[0.295,0.07,0.616,0.374]},
+"Music-flat.svg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.369,0.448,0.464,0.763]},
+"Music-sharp.svg":{"anchor":"note","where":"left","hs":2.85,"staff":[0.259,0.739],"ink":[0.366,0.51,0.468,0.851]},
+"Music-natural.svg":{"anchor":"note","where":"left","hs":2.8,"staff":[0.259,0.739],"ink":[0.374,0.513,0.46,0.846]},
+"Music-doubleflat.svg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.308,0.445,0.518,0.76]},
+"Music-doublesharp3.svg":{"anchor":"note","where":"left","hs":0.85,"staff":[0.259,0.739],"ink":[0.421,0.63,0.52,0.729]},
+"Key-Signatures-flats.svg":{"anchor":"staffStart","where":"onStaff","hs":7.4,"step":4.0,"staff":[0.285,0.742],"ink":[0.014,0.092,0.994,0.938]},
+"Key-Signatures-sharps.svg":{"anchor":"staffStart","where":"onStaff","hs":7.45,"step":3.8,"staff":[0.27,0.707],"ink":[0.013,0.072,0.993,0.884]},
+"Music-demiflat.svg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.369,0.448,0.463,0.763]},
+"Music-flat2.jpg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.368,0.449,0.463,0.761]},
+"Music-sesquiflat.svg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.32,0.445,0.524,0.761]},
+"Music-doubleflat2.jpg":{"anchor":"note","where":"left","hs":2.6,"staff":[0.259,0.739],"ink":[0.308,0.445,0.519,0.759]},
+"Music-demisharp.svg":{"anchor":"note","where":"left","hs":2.9,"staff":[0.259,0.739],"ink":[0.399,0.5,0.454,0.845]},
+"Music-sesquisharp.svg":{"anchor":"note","where":"left","hs":3.1,"staff":[0.259,0.739],"ink":[0.353,0.499,0.498,0.87]},
+"Septimal_minor_third_on_C.png":{"anchor":"note","where":"onStaff","hs":7.4,"step":3.7,"staff":[0.294,0.741],"ink":[0.041,0.086,0.97,0.912]},
+"Notation_of_partials_1-19_for_1-1.png":{"anchor":"note","where":"onStaff","hs":15.2,"step":1.0,"staff":[0.466,0.704],"ink":[0.02,0.043,0.994,0.947]},
+"Music-timesig.svg":{"anchor":"staffStart","where":"onStaff","hs":3.7,"step":4.0,"staff":[0.259,0.739],"ink":[0.419,0.275,0.576,0.72]},
+"Compound_duple_drum_pattern.png":{"anchor":"note","where":"onStaff","hs":9.5,"step":3.0,"staff":[0.365,0.728],"ink":[0.036,0.07,0.975,0.93]},
+"Five-four_time_signature.png":{"anchor":"staffStart","where":"onStaff","hs":3.95,"step":4.0,"staff":[0.155,0.852],"ink":[0.398,0.162,0.603,0.849]},
+"Music-commontime.svg":{"anchor":"staffStart","where":"onStaff","hs":2,"step":4.1,"staff":[0.259,0.739],"ink":[0.394,0.38,0.591,0.625]},
+"Music-cuttime.svg":{"anchor":"staffStart","where":"onStaff","hs":3.4,"step":4.0,"staff":[0.259,0.739],"ink":[0.394,0.298,0.591,0.703]},
+"Music-metronome.svg":{"anchor":"note","where":"above","hs":2.5,"ink":[0.045,0.205,0.935,0.77]},
+"Tie-music.png":{"anchor":"note","where":"betweenNotes","hs":0.57,"staff":[0.049,0.819],"ink":[0.204,0.868,0.784,0.977]},
+"Music-slur.svg":{"anchor":"note","where":"onStaff","hs":2.2,"step":0,"staff":[0.26,0.74],"ink":[0.144,0.659,0.84,0.925]},
+"Music-legato.svg":{"anchor":"note","where":"onStaff","hs":2.2,"step":0,"staff":[0.26,0.74],"ink":[0.144,0.659,0.84,0.925]},
+"Music-glissando.svg":{"anchor":"note","where":"betweenNotes","hs":2.5,"staff":[0.26,0.74],"ink":[0.275,0.346,0.721,0.646]},
+"Music-triplet.svg":{"anchor":"note","where":"betweenNotes","hs":1.34,"staff":[0.26,0.74],"ink":[0.033,0.05,0.966,0.211]},
+"Music-triad.svg":{"anchor":"note","where":"onStaff","hs":3.0,"step":0,"staff":[0.26,0.74],"ink":[0.4,0.32,0.594,0.679]},
+"Music-arpeggio.svg":{"anchor":"note","where":"left","hs":4.2,"staff":[0.26,0.74],"ink":[0.31,0.249,0.375,0.751]},
+"Music_dynamic_pianississimo.svg":{"anchor":"note","where":"below","hs":1.48,"ink":[0,0.259,1,0.933]},
+"Music_dynamic_pianissimo.svg":{"anchor":"note","where":"below","hs":1.48,"ink":[0,0.259,1,0.933]},
+"Music_dynamic_piano.svg":{"anchor":"note","where":"below","hs":1.48,"ink":[0,0.259,1,0.933]},
+"Music_dynamic_mezzo_piano.svg":{"anchor":"note","where":"below","hs":1.52,"ink":[0,0.244,1,0.933]},
+"Music_dynamic_mezzo_forte.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music_dynamic_forte.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music_dynamic_fortissimo.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music_dynamic_fortississimo.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music_expression_sforzando_sfz.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music_dynamic_fortepiano.svg":{"anchor":"note","where":"below","hs":2.19,"ink":[0,0.0,1,0.996]},
+"Music-crescendo.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.101,0.255,0.897,0.736]},
+"Music-diminuendo.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.1,0.265,0.9,0.744]},
+"Musical_symbols_for_%22niente%22.png":{"anchor":"note","where":"below","hs":1.3,"ink":[0.056,0.29,0.912,0.826]},
+"Music-staccato.svg":{"anchor":"note","where":"aboveHead","hs":0.33,"staff":[0.26,0.74],"ink":[0.48,0.155,0.519,0.194]},
+"Music-staccatissimo.svg":{"anchor":"note","where":"aboveHead","hs":0.61,"staff":[0.26,0.74],"ink":[0.472,0.122,0.525,0.195]},
+"Music-tenuto.svg":{"anchor":"note","where":"aboveHead","hs":0.12,"staff":[0.26,0.74],"ink":[0.43,0.17,0.569,0.184]},
+"Music-fermata.svg":{"anchor":"note","where":"above","hs":1.37,"staff":[0.26,0.74],"ink":[0.34,0.015,0.654,0.179]},
+"Music-marcato.svg":{"anchor":"note","where":"aboveHead","hs":1.0,"staff":[0.26,0.74],"ink":[0.4,0.092,0.593,0.212]},
+"Music-strong-marcato.svg":{"anchor":"note","where":"aboveHead","hs":1.59,"staff":[0.26,0.74],"ink":[0.444,0.043,0.562,0.234]},
+"Music-tremolo.svg":{"anchor":"note","where":"onStaff","hs":1.9,"step":0,"staff":[0.13,0.917],"ink":[0.496,0.246,0.63,0.621]},
+"Music_Tremolo_shortcut.jpg":{"anchor":"note","where":"onStaff","hs":6.2,"step":0,"staff":[0.113,0.629],"ink":[0.0,0.108,0.996,0.903]},
+"Music-trill.svg":{"anchor":"note","where":"above","hs":1.52,"staff":[0.26,0.74],"ink":[0.391,0.028,0.609,0.21]},
+"Music-pizzicato.svg":{"anchor":"note","where":"above","hs":1.17,"staff":[0.26,0.74],"ink":[0.425,0.069,0.566,0.21]},
+"Music-mordent.svg":{"anchor":"note","where":"above","hs":0.95,"staff":[0.26,0.74],"ink":[0.355,0.066,0.635,0.18]},
+"Music-inverted-mordent.svg":{"anchor":"note","where":"above","hs":1.57,"staff":[0.26,0.74],"ink":[0.355,0.033,0.635,0.221]},
+"Music-turn-2.svg":{"anchor":"note","where":"above","hs":1.0,"staff":[0.26,0.74],"ink":[0.345,0.064,0.649,0.184]},
+"Music-turn_%28inverted%29.png":{"anchor":"note","where":"above","hs":0.96,"staff":[0.258,0.738],"ink":[0.345,0.06,0.645,0.175]},
+"Music-inverted_turn.png":{"anchor":"note","where":"above","hs":1.25,"staff":[0.258,0.738],"ink":[0.345,0.045,0.645,0.195]},
+"Music-appoggiatura.svg":{"anchor":"note","where":"onStaff","hs":2.4,"step":0,"staff":[0.26,0.74],"ink":[0.331,0.045,0.5,0.338]},
+"Music-acciaccatura.svg":{"anchor":"note","where":"onStaff","hs":2.47,"step":0,"staff":[0.357,0.933],"ink":[0.337,0.102,0.502,0.458]},
+"One_octave_up.jpg":{"anchor":"note","where":"betweenNotes","hs":1.43,"staff":[0.335,0.703],"ink":[0.092,0.057,0.94,0.189]},
+"One_octave_down.jpg":{"anchor":"note","where":"betweenNotes","hs":1.3,"staff":[0.223,0.55],"ink":[0.056,0.736,0.92,0.843]},
+"Two_octaves_up.jpg":{"anchor":"note","where":"betweenNotes","hs":1.41,"staff":[0.368,0.708],"ink":[0.136,0.088,0.904,0.208]},
+"Two_octaves_down.jpg":{"anchor":"note","where":"betweenNotes","hs":1.3,"staff":[0.216,0.542],"ink":[0.148,0.75,0.936,0.856]},
+"Music-repeat.svg":{"anchor":"barline","where":"onStaff","hs":4.15,"step":0,"staff":[0.121,0.879],"ink":[0.092,0.107,0.898,0.893]},
+"Music-simile.svg":{"anchor":"free","where":"onStaff","hs":2.0,"step":0,"staff":[0.022,0.978],"ink":[0.032,0.26,0.98,0.76]},
+"Music-volte.svg":{"anchor":"barline","where":"above","hs":5.2,"ink":[0.064,0.17,0.932,0.83]},
+"Music-dacapo.svg":{"anchor":"barline","where":"above","hs":1.5,"ink":[0.151,0.338,0.82,0.649]},
+"Music-dalsegno.svg":{"anchor":"barline","where":"above","hs":1.5,"ink":[0.177,0.33,0.79,0.634]},
+"SegnoTeken.svg":{"anchor":"barline","where":"above","hs":3.0,"ink":[0.028,0.022,0.972,0.967]},
+"Coda_sign.svg":{"anchor":"barline","where":"above","hs":2.5,"ink":[0.021,0.019,0.969,0.971]},
+"Direct_music_symbol_%28Guida%2C_W%C3%A4chter%2C_custos%29.png":{"anchor":"barline","where":"onStaff","hs":2.5,"step":4,"ink":[0.16,0.16,0.768,0.75]},
+"Music-snappizzicato.svg":{"anchor":"note","where":"above","hs":1.6,"staff":[0.26,0.74],"ink":[0.424,0.018,0.568,0.21]},
+"Music-harmonic.svg":{"anchor":"note","where":"above","hs":0.78,"staff":[0.26,0.74],"ink":[0.476,0.111,0.57,0.205]},
+"Music-upbow.svg":{"anchor":"note","where":"above","hs":1.6,"staff":[0.26,0.74],"ink":[0.508,0.02,0.626,0.212]},
+"Music-downbow.svg":{"anchor":"note","where":"above","hs":1.37,"staff":[0.26,0.74],"ink":[0.485,0.055,0.644,0.219]},
+"Con_sordino.svg":{"anchor":"note","where":"above","hs":1.5,"ink":[0.0,0.0,0.999,0.997]},
+"Senza_sordino.svg":{"anchor":"note","where":"above","hs":1.5,"ink":[0.0,0.0,0.998,0.994]},
+"Pedal_Mark_1.svg":{"anchor":"note","where":"below","hs":2.0,"ink":[0.0,0.0,0.998,0.982]},
+"Music-pedalup.svg":{"anchor":"note","where":"below","hs":1.5,"ink":[0.0,0.0,0.996,0.996]},
+"Music-pedal0.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.352,0.957,0.605]},
+"Music-pedal.svg":{"anchor":"note","where":"betweenNotes","hs":1.2,"ink":[0.048,0.35,0.956,0.606]}};
 let dotted = false; // place new notes/rests dotted
 // Notes/rests get stable ids so library symbols can stay attached to them
 let lastId = 0;
@@ -323,10 +451,14 @@ function layout(stave, minWidth) {
   const out = { items: [], bars: [], over: [], showTime: true };
   const si = state.staves.indexOf(stave), prev = state.staves[si - 1];
   out.showTime = !prev || prev.time !== stave.time;
+  out.keyX = x - 2;
+  if (stave.key) x += Math.abs(stave.key) * 10 + 8;
+  out.timeX = x + 16;
   if (out.showTime) x += 34;
   if (stave.startRepeat) { out.startX = x; x += 20; }
   x += 14;
   let fill = 0, barStart = x - 14;
+  out.musicStart = x - 6;
   stave.items.forEach((it, ii) => {
     out.items.push({ x: x + 6 });
     x += itemAdv(it);
@@ -341,7 +473,7 @@ function layout(stave, minWidth) {
     }
   });
   out.tailX = x + 6;
-  out.width = Math.max(minWidth, x + 70, ...stave.marks.map(m => m.x + m.w / 2 + 40));
+  out.width = Math.max(minWidth, x + 70, ...stave.marks.map(m => (m.x || 0) + 80));
   return out;
 }
 
@@ -357,10 +489,16 @@ function drawStave(svg, stave, si, L) {
   const c = CLEFS[stave.clef];
   const clef = el('text', { x: 20, y: yOf(c.at), 'font-family': 'Noto Music', 'font-size': 52, fill: 'currentColor' }, svg);
   clef.textContent = c.glyph;
+  // key signature: sharps/flats in the standard order and positions for this clef
+  const ks = stave.key || 0, steps = KEY_STEPS[stave.clef][ks > 0 ? 0 : 1];
+  for (let i = 0; i < Math.abs(ks); i++) {
+    const t = el('text', { x: L.keyX + i * 10, y: yOf(steps[i]) + (ks > 0 ? 7 : 3), 'font-family': 'Noto Music', 'font-size': 32, fill: 'currentColor' }, svg);
+    t.textContent = ks > 0 ? '\u266F' : '\u266D';
+  }
   if (L.showTime) {
     const [n, d] = stave.time.split('/');
     for (const [txt, base] of [[n, 4], [d, 8]]) {
-      const t = el('text', { x: 82, y: yOf(base) - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30,
+      const t = el('text', { x: L.timeX, y: yOf(base) - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30,
         'text-anchor': 'middle', fill: 'currentColor' }, svg);
       t.textContent = txt;
     }
@@ -397,12 +535,13 @@ function render() {
     const opts = (o, v) => Object.entries(o).map(([k, n]) => `<option value="${k}"${k === v ? ' selected' : ''}>${n}</option>`).join('');
     head.innerHTML = `<span class="num">${si + 1}</span>
       <select data-k="clef" aria-label="Clef">${opts(Object.fromEntries(Object.entries(CLEFS).map(([k, c]) => [k, c.name + ' clef'])), stave.clef)}</select>
+      <select data-k="key" aria-label="Key signature">${KEYS.map(([k, n]) => `<option value="${k}"${k === (stave.key || 0) ? ' selected' : ''}>${n}</option>`).join('')}</select>
       <select data-k="time" aria-label="Time signature">${opts(Object.fromEntries(TIMES.map(t => [t, t])), stave.time)}</select>
       <select data-k="startRepeat" aria-label="Start of line">${opts({ false: 'Plain start', true: 'Left repeat' }, String(stave.startRepeat))}</select>
       <select data-k="end" aria-label="End of line">${opts(ENDS, stave.end)}</select>`;
     head.querySelectorAll('select').forEach(s => s.onchange = () => commit(() => {
       const k = s.dataset.k;
-      stave[k] = k === 'startRepeat' ? s.value === 'true' : s.value;
+      stave[k] = k === 'startRepeat' ? s.value === 'true' : k === 'key' ? +s.value : s.value;
     }));
     if (state.staves.length > 1) {
       const rm = document.createElement('button');
@@ -435,41 +574,61 @@ function render() {
       });
     });
 
-    // Library symbols snap: horizontally onto the nearest note/rest (and then follow it), vertically onto staff lines/spaces
-    const markPos = m => {
+    // Library symbols: each one is placed by its notation rule (RULES), anchored to a note/rest, a barline or the stave start
+    const ctxFor = (m, r) => {
+      if (r.anchor === 'barline' || r.anchor === 'staffStart') {
+        const xs = r.anchor === 'staffStart' ? [L.musicStart] : [L.musicStart - 8, ...L.bars, L.width - 10];
+        const ax = xs.reduce((b, x) => Math.abs(x - (m.x ?? 0)) < Math.abs(b - (m.x ?? 0)) ? x : b, xs[0]);
+        return { ax, noteY: yOf(4), noteTop: yOf(0), noteBot: yOf(8), stemUp: false, nextX: ax + 60 };
+      }
       const ii = m.a != null ? stave.items.findIndex(it => it.id === m.a) : -1;
-      return { x: ii >= 0 ? L.items[ii].x : m.x, y: yOf(m.s) };
+      if (ii < 0) return { ax: m.x ?? 80, noteY: yOf(4), noteTop: yOf(0), noteBot: yOf(8), stemUp: false, nextX: (m.x ?? 80) + 60 };
+      const it = stave.items[ii], ax = L.items[ii].x, nextX = L.items[ii + 1]?.x ?? ax + 60;
+      if (it.kind === 'rest') return { ax, noteY: yOf(4), noteTop: yOf(1), noteBot: yOf(7), stemUp: false, nextX };
+      const s = pitchToStep(stave.clef, it.p), noteY = yOf(s), stemUp = s >= 4, stem = durOf(it.dur).stem;
+      return { ax, noteY, stemUp, nextX, noteTop: noteY - (stem && stemUp ? 40 : 7), noteBot: noteY + (stem && !stemUp ? 40 : 7) };
     };
-    const snap = p => {
-      let best = -1, bd = 34;
+    // where a tap or drag attaches a symbol
+    const snap = (sym, p) => {
+      const r = markRule(sym);
+      if (r.anchor !== 'note') return { a: null, x: Math.round(p.x) };
+      let best = -1, bd = 70;
       L.items.forEach((li, ii) => { const d = Math.abs(li.x - p.x); if (d < bd) { bd = d; best = ii; } });
-      const s = Math.max(-10, Math.min(18, Math.round((p.y - TOP) / STEP)));
-      return best >= 0 ? { a: stave.items[best].id, x: L.items[best].x, s } : { a: null, x: Math.max(20, Math.round(p.x / 12) * 12), s };
+      return best >= 0 ? { a: stave.items[best].id, x: L.items[best].x } : { a: null, x: Math.round(p.x) };
+    };
+    const placed = m => markGeom(m, markRule(m), ctxFor(m, markRule(m)));
+    // symbols sharing a note and a side stack outward instead of overlapping
+    const stack = {};
+    const stacked = geo => {
+      const r = geo.rule, dir = r.where === 'above' || (r.where === 'aboveHead' && !geo.c.stemUp) ? -1 : r.where === 'below' || r.where === 'aboveHead' ? 1 : 0;
+      if (!dir) return geo;
+      const key = Math.round(geo.c.ax) + ':' + dir, used = stack[key] || 0;
+      stack[key] = used + geo.h + 4;
+      return { ...geo, y: geo.y + dir * used };
     };
     stave.marks.forEach((m, mi) => {
-      if (m.s == null) Object.assign(m, { s: Math.round((m.y - TOP) / STEP), a: null });
       const g = el('g', { class: 'mark' + (selMark && selMark.si === si && selMark.mi === mi ? ' sel' : '') }, svg);
-      const mp = markPos(m);
-      drawMark(g, m, mp.x, mp.y);
+      const geo = stacked({ ...placed(m), rule: markRule(m) });
+      drawMark(g, m, geo);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
       g.addEventListener('contextmenu', e => { e.preventDefault(); removeMark(si, mi); });
-      // drag to move; a tap without movement selects (or erases)
+      // drag sideways to re-attach to another note (height is set by the symbol's rule); a tap selects (or erases)
       g.addEventListener('pointerdown', e => {
         e.stopPropagation();
         g.setPointerCapture(e.pointerId);
-        const x0 = e.clientX, y0 = e.clientY;
+        const x0 = e.clientX, y0 = e.clientY, cx = geo.x + geo.w / 2;
         let dx = 0, dy = 0;
         g.onpointermove = ev => {
           dx = ev.clientX - x0; dy = ev.clientY - y0;
-          const t = snap({ x: mp.x + dx, y: mp.y + dy });
-          g.setAttribute('transform', `translate(${t.x - mp.x} ${yOf(t.s) - mp.y})`);
+          const t = placed({ ...m, ...snap(m, { x: cx + dx, y: 0 }) });
+          g.setAttribute('transform', `translate(${t.x - geo.x} ${t.y - geo.y})`);
         };
         g.onpointerup = () => {
           g.onpointermove = g.onpointerup = null;
           if (Math.abs(dx) + Math.abs(dy) > 3) {
             selMark = { si, mi }; sel = null;
-            return commit(() => Object.assign(m, snap({ x: mp.x + dx, y: mp.y + dy })));
+            return commit(() => Object.assign(m, snap(m, { x: cx + dx, y: 0 })));
           }
           if (tool.kind === 'erase') return removeMark(si, mi);
           selMark = selMark && selMark.si === si && selMark.mi === mi ? null : { si, mi };
@@ -491,7 +650,7 @@ function render() {
     const showGhost = e => {
       ghost.innerHTML = '';
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
-      if (tool.kind === 'mark') { const t = snap(svgPoint(e)); return drawMark(ghost, tool.sym, t.x, yOf(t.s)); }
+      if (tool.kind === 'mark') { const m = { ...tool.sym, ...snap(tool.sym, svgPoint(e)) }; return drawMark(ghost, m, placed(m)); }
       const s = stepAt(e);
       drawSymbol(ghost, tool.kind, tool.dur, insX, s, dotted);
       if (tool.kind === 'note') {
@@ -510,7 +669,7 @@ function render() {
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
       if (tool.kind === 'mark') {
         selMark = { si, mi: stave.marks.length }; sel = null;
-        return commit(() => stave.marks.push({ ...tool.sym, ...snap(svgPoint(e)) }));
+        return commit(() => stave.marks.push({ ...tool.sym, ...snap(tool.sym, svgPoint(e)) }));
       }
       const item = { kind: tool.kind, dur: tool.dur, id: newId() };
       if (dotted) item.dot = true;
@@ -539,19 +698,65 @@ function render() {
   document.getElementById('selUp').disabled = document.getElementById('selDown').disabled = !selMark && (!selItem || selItem.kind === 'rest');
 }
 
-// A library symbol: an image (sized to h, keeping aspect) or a text mark, centred on (x, y)
-function drawMark(g, m, x, y) {
+// Where a library symbol goes, from its rule and its anchor (c: anchor x, notehead y/extent, stem direction, next note x).
+// Images that draw their own stave are scaled so those lines land exactly on ours.
+function markGeom(m, r, c) {
+  const k = m.k || 1, off = (m.off || 0) * STEP;
+  if (m.d) return finishGeom(r, c, { w: 0, h: r.hs * GAP * k }, off);
   if (m.t) {
-    const t = el('text', { x, y: y + m.h * 0.35, 'font-family': 'Georgia, serif', 'font-style': 'italic', 'font-weight': 700,
-      'font-size': m.h, 'text-anchor': 'middle', fill: 'currentColor' }, g);
+    const h = r.hs * GAP * k, w = Math.max(12, m.t.length * h * 0.55);
+    return finishGeom(r, c, { w, h }, off);
+  }
+  const [i0, j0, i1, j1] = r.ink || [0, 0, 1, 1];
+  if (r.staff && (r.where === 'onStaff' || r.where === 'onHead')) {
+    const sc = 4 * GAP / ((r.staff[1] - r.staff[0]) * m.ih);
+    const vb = [i0 * m.iw, 0, (i1 - i0) * m.iw, m.ih], w = vb[2] * sc, h = m.ih * sc;
+    return { x: c.ax - w / 2, y: yOf(0) - r.staff[0] * h + off, w, h, vb };
+  }
+  const vb = [i0 * m.iw, j0 * m.ih, (i1 - i0) * m.iw, (j1 - j0) * m.ih];
+  const h = r.hs * GAP * k;
+  return finishGeom(r, c, { w: h * vb[2] / vb[3], h, vb }, off);
+}
+function finishGeom(r, c, geo, off) {
+  const { h } = geo;
+  let cx = c.ax, cy;
+  switch (r.where) {
+    case 'above': cy = Math.min(yOf(0), c.noteTop) - GAP * 0.7 - h / 2; break;
+    case 'below': cy = Math.max(yOf(8), c.noteBot) + GAP * 0.7 + h / 2; break;
+    case 'aboveHead': cy = c.stemUp ? c.noteY + GAP * 0.9 + h / 2 : c.noteY - GAP * 0.9 - h / 2; break;
+    case 'left': cy = c.noteY; cx = c.ax - 12 - geo.w / 2; break;
+    case 'right': cy = c.noteY; cx = c.ax + 12 + geo.w / 2; break;
+    case 'onHead': cy = c.noteY; break;
+    case 'betweenNotes':
+      geo.w = Math.max(24, c.nextX - c.ax); geo.stretch = true; cx = c.ax + geo.w / 2;
+      cy = r.step != null ? yOf(r.step) : c.stemUp ? c.noteY + GAP * 0.8 + h / 2 : c.noteY - GAP * 0.8 - h / 2;
+      break;
+    default: cy = yOf(r.step ?? 4);
+  }
+  return { ...geo, x: cx - geo.w / 2, y: cy - h / 2 + off, c };
+}
+const TEXT_RULE = { anchor: 'note', where: 'above', hs: 1.3 };
+const SLUR_RULE = { anchor: 'note', where: 'betweenNotes', hs: 0.9 };
+const markRule = m => m.d ? SLUR_RULE : m.t ? TEXT_RULE : RULES[m.u.split('/').pop().replace(/^\d+px-/, '')] || { anchor: 'note', where: 'above', hs: 2 };
+
+function drawMark(g, m, geo) {
+  if (m.d) {
+    // slur: curve from this note to the next, bowing away from the noteheads
+    const { x, y, w, h } = geo, down = geo.y > geo.c.noteY;
+    const y0 = down ? y : y + h, y1 = down ? y + h * 2 : y - h;
+    el('path', { d: `M${x + 4} ${y0} Q${x + w / 2} ${y1} ${x + w - 4} ${y0} Q${x + w / 2} ${y1 + (down ? -3 : 3)} ${x + 4} ${y0} Z`,
+      fill: 'currentColor', stroke: 'currentColor', 'stroke-width': 1 }, g);
+  } else if (m.t) {
+    const t = el('text', { x: geo.x + geo.w / 2, y: geo.y + geo.h * 0.8, 'font-family': 'Georgia, serif', 'font-style': 'italic', 'font-weight': 700,
+      'font-size': geo.h, 'text-anchor': 'middle', fill: 'currentColor' }, g);
     t.textContent = m.t;
   } else {
-    el('image', { href: imgUrl(m.u), x: x - m.w / 2, y: y - m.h / 2, width: m.w, height: m.h, preserveAspectRatio: 'xMidYMid meet' }, g);
+    const box = el('svg', { x: geo.x, y: geo.y, width: geo.w, height: geo.h, viewBox: geo.vb.join(' '),
+      preserveAspectRatio: geo.stretch ? 'none' : 'xMidYMid meet', overflow: 'hidden' }, g);
+    el('image', { href: imgUrl(m.u), x: 0, y: 0, width: m.iw, height: m.ih, preserveAspectRatio: 'none' }, box);
   }
-  const bw = m.t ? Math.max(14, m.t.length * m.h * 0.5) : m.w;
-  el('rect', { class: 'box', x: x - bw / 2 - 3, y: y - m.h / 2 - 3, width: bw + 6, height: m.h + 6, fill: 'transparent', rx: 3 }, g);
+  el('rect', { class: 'box', x: geo.x - 3, y: geo.y - 3, width: geo.w + 6, height: geo.h + 6, fill: 'transparent', rx: 3 }, g);
 }
-const markSize = (iw, ih, h) => { const w = Math.min(160, h * iw / ih); return { w, h: w * ih / iw }; };
 
 function removeMark(si, mi) {
   selMark = null;
@@ -560,12 +765,11 @@ function removeMark(si, mi) {
 function resizeMark(f) {
   const m = selMark && state.staves[selMark.si]?.marks[selMark.mi];
   if (!m) return;
-  const h = Math.max(10, Math.min(160, m.h * f));
-  commit(() => { if (m.t) m.h = h; else { m.w = m.w * h / m.h; m.h = h; } });
+  commit(() => m.k = Math.max(0.4, Math.min(3, (m.k || 1) * f)));
 }
 function moveMark(ds) {
   const m = selMark && state.staves[selMark.si]?.marks[selMark.mi];
-  if (m) commit(() => m.s = Math.max(-10, Math.min(18, m.s + ds)));
+  if (m) commit(() => m.off = Math.max(-12, Math.min(12, (m.off || 0) + ds)));
 }
 
 function buildLibrary() {
@@ -582,10 +786,11 @@ function buildLibrary() {
       b.className = 'sym-btn';
       b.title = name;
       b.dataset.search = (name + ' ' + grp.name).toLowerCase();
-      const sym = grp.text ? { t: u, h: 18 } : { u, n: name, ...markSize(iw, ih, 40) };
+      const sym = u === 'draw:slur' ? { d: 'slur', n: name } : grp.text ? { t: u, n: name, g: grp.name } : { u, n: name, iw, ih };
       if (grp.text) b.innerHTML = '<div class="txt"></div><span class="lbl"></span>';
       else b.innerHTML = `<img loading="lazy" alt=""><span class="lbl"></span>`;
-      if (grp.text) b.querySelector('.txt').textContent = u; else b.querySelector('img').src = imgUrl(u);
+      if (sym.d) b.querySelector('img').outerHTML = '<svg viewBox="0 0 40 30" style="width:100%;height:40px"><path d="M4 20 Q20 4 36 20 Q20 8 4 20Z" fill="currentColor"/></svg>';
+      else if (grp.text) b.querySelector('.txt').textContent = u; else b.querySelector('img').src = imgUrl(u);
       b.querySelector('.lbl').textContent = name;
       b.onclick = () => {
         setTool(tool.kind === 'mark' && tool.btn === b ? { kind: 'note', dur: 'quarter' } : { kind: 'mark', sym, btn: b });
