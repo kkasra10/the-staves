@@ -364,6 +364,15 @@ function beamed(m, E) {
   }
   return out;
 }
+// the bars a simile sign stands for: from its own bar, or reaching back over empty bars when it sits on a barline among them
+function simileSpan(m, E) {
+  const n = +m.d.slice(-1), xs = E.barXs, last = xs.length - 2, k = Math.max(0, Math.min(last, m.bar ?? 0));
+  const empty = j => j >= 0 && !E.stave.items.some((it, i) => it.kind === 'note' && E.L.items[i].x > xs[j] && E.L.items[i].x < xs[j + 1]);
+  let a = k;
+  if (n > 1) while (a > 0 && empty(a - 1) && k - a < Math.floor(n / 2)) a--;
+  a = Math.max(0, Math.min(a, last - n + 1));
+  return [a, Math.min(last, a + n - 1)];
+}
 const barX = (m, E) => E.barXs[Math.max(0, Math.min(E.barXs.length - 1, m.bar ?? 0))];
 
 const NATIVE = {
@@ -490,18 +499,18 @@ const NATIVE = {
     return box(x - 18, yOf(0), x + 2, yOf(8));
   } },
   simile1: { anchor: 'barMid', draw(g, m, E) {
-    const k = Math.max(0, Math.min(E.barXs.length - 2, m.bar ?? 0)), x = (E.barXs[k] + E.barXs[k + 1]) / 2;
+    const [k] = simileSpan(m, E), x = (E.barXs[k] + E.barXs[k + 1]) / 2;
     simileSlash(g, x); repeatDotsDiag(g, x, 8);
     return box(x - 12, yOf(1), x + 12, yOf(7));
   } },
   simile2: { anchor: 'bar', draw(g, m, E) {
-    const x = barX(m, E);
+    const x = E.barXs[simileSpan(m, E)[0] + 1];  // on the barline between its two bars
     simileSlash(g, x - 5); simileSlash(g, x + 5); repeatDotsDiag(g, x, 13);
     txt(g, x, yOf(-1.5), '2', { italic: false, size: 15 });
     return box(x - 16, yOf(-3), x + 16, yOf(7));
   } },
   simile3: { anchor: 'bar', draw(g, m, E) {
-    const x = barX(m, E);
+    const a = simileSpan(m, E)[0], x = (E.barXs[a + 1] + E.barXs[a + 2]) / 2;  // in the middle one of its three bars
     simileSlash(g, x - 10); simileSlash(g, x); simileSlash(g, x + 10); repeatDotsDiag(g, x, 18);
     txt(g, x, yOf(-1.5), '3', { italic: false, size: 15 });
     return box(x - 21, yOf(-3), x + 21, yOf(7));
@@ -624,7 +633,7 @@ const NATIVE_LIB = {
     ['Quindicesima alta (15ma)', '15ma', mk('ottava', { var: '15ma' })], ['Quindicesima bassa (15mb)', '15mb', mk('ottava', { var: '15mb' })]],
   'Repetition, codas, and other direction symbols': [
     ['Start repeat', '\u{1D106}', mk('repStart')], ['End repeat', '\u{1D107}', mk('repEnd')],
-    ['Simile (repeat one bar)', '\u{1D10E}', mk('simile1')], ['Simile (repeat two bars)', '\u{1D10F}', mk('simile2')], ['Simile (repeat three bars)', './//.', mk('simile3')],
+    ['Simile (repeat one bar)', '\u{1D10E}', mk('simile1')], ['Simile (repeat two bars)', '\u{1D10F}', mk('simile2')], ['Simile (repeat three bars)', '%%%', mk('simile3')],
     ['First ending (volta 1.)', '1.', mk('volta', { text: '1.', span: 1 })], ['Second ending (volta 2.)', '2.', mk('volta', { text: '2.', span: 1, closed: false })],
     ['Ending with any label…', '1.–2.', () => { const r = askText('Ending label', '1.–2.', 'text'); return r && mk('volta', { ...r, span: 1 })(); }],
     ['Segno', '\u{1D10B}', mk('segno')], ['Coda', '\u{1D10C}', mk('coda')],
@@ -1031,11 +1040,16 @@ function render() {
       },
     };
     const beamedIdx = new Set(stave.marks.filter(m => m.d === 'beam').flatMap(m => { const b = beamed(m, E); return b.length > 1 ? b.map(n => n.i) : []; }));
+    const simileRests = new Set();
+    for (const m of stave.marks) if (/^simile[123]$/.test(m.d)) {
+      const [a, b] = simileSpan(m, E);
+      stave.items.forEach((it, i) => { if (it.kind === 'rest' && L.items[i].x > E.barXs[a] && L.items[i].x < E.barXs[b + 1]) simileRests.add(i); });
+    }
     stave.items.forEach((it, ii) => {
       const x = L.items[ii].x, steps = it.kind === 'rest' ? [4] : pitchesOf(it).map(p => pitchToStep(stave.clef, p));
       const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : ''), 'data-si': si, 'data-ii': ii }, svg);
       if (it.dur === 'measure') drawMeasureRest(g, x, it.count);
-      else drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot, beamedIdx.has(ii));
+      else if (!simileRests.has(ii)) drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot, beamedIdx.has(ii));  // a simile bar shows only its sign
       const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
       el('rect', { x: x - (it.dur === 'measure' ? 36 : 13), y: ys[0], width: it.dur === 'measure' ? 72 : 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
@@ -1927,7 +1941,7 @@ const LANG = (() => {
   };
   // between two notes: (note a) slur (note b); slur(3) reaches three notes on
   const LINKS = { tie: 'tie', slur: 'slur', GLSW: 'gliss', GLSS: 'gliss', '<<<': 'cresc', '>>>': 'dim' };
-  const BARS = { '[||:': nat('repStart'), ':||]': nat('repEnd'), '%': nat('simile1'), '%%': nat('simile2'), './//.': nat('simile3'), SEG: nat('segno'), COD: nat('coda'), DIRC: nat('direct'),
+  const BARS = { '[||:': nat('repStart'), ':||]': nat('repEnd'), '%': nat('simile1'), '%%': nat('simile2'), '%%%': nat('simile3'), SEG: nat('segno'), COD: nat('coda'), DIRC: nat('direct'),
     '||': named(LINES, 'Double bar line'), '|]': named(LINES, 'Bold double bar line'), 'D|': named(LINES, 'Dotted bar line'),
     ...Object.fromEntries(Object.entries(DIRS).map(([c, t]) => [c, nat('dir', { text: t })])) };
   const ENDS_CODE = { '|': 'single', '||': 'double', '|]': 'final', ':||]': 'repeat' };
