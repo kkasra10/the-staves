@@ -1900,7 +1900,7 @@ const LANG = (() => {
     '^.': named('Articulation', 'Staccato'), '^*': named('Articulation', 'Staccatissimo'), '^-': named('Articulation', 'Tenuto'),
     '^(.': named('Articulation', 'Fermata or Pause'), '^>': named('Articulation', 'Accent'), '^^': named('Articulation', 'Marcato'),
     '^TR': named('Ornaments', 'Trill'), '^~~': named('Ornaments', 'Upper mordent'), '^~|~': named('Ornaments', 'Lower mordent (inverted)'),
-    '^/\\/': img('Ornaments', 3), '^(\\/\\)': img('Ornaments', 4),
+    '^/\\/': img('Ornaments', 3), '^(\\/\\)': img('Ornaments', 4), '^\\/\\': img('Ornaments', 5),
     '^+': nat('bow', { var: 'lh' }), '^(.)': nat('bow', { var: 'snap' }), '^()': nat('bow', { var: 'harmonic' }), '^UB': nat('bow', { var: 'up' }),
     '^DB': nat('bow', { var: 'down' }), '^CNSR': nat('bow', { var: 'con' }), '^SNSR': nat('bow', { var: 'senza' }),
     _PED: nat('ped'), _RPED: nat('ped', { var: 'up' }),
