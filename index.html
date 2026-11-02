@@ -1537,40 +1537,234 @@ const fileOf = u => u.split('/').pop().replace(/^\d+px-/, '');
 const OTTAVA = { '8va': 12, '8vb': -12, '15ma': 24, '15mb': -24 };
 const CLEF_SHIFT = { G8vb: -12, F8vb: -12, G8va: 12, F8va: 12, G15mb: -24, G15ma: 24 };
 
-// One stave as events: start time and length in whole notes, MIDI numbers (chords have several)
-function staveEvents(st) {
-  const [n, d] = st.time.split('/').map(Number), cap = n / d, items = st.items, marks = st.marks || [];
-  const shift = items.map(() => CLEF_SHIFT[marks.find(m => m.d === 'clef')?.var] || 0);
-  for (const m of marks) if (m.d === 'ottava') {
-    const a = items.findIndex(it => it.id === m.a);
-    if (a >= 0) for (let i = a; i <= Math.min(items.length - 1, a + (m.span ?? 2)); i++) shift[i] += OTTAVA[m.var] || 0;
+// What the library pictures mean when played, by image file
+const PLAY_IMG = {
+  'Music_dynamic_pianississimo.svg': { dyn: 0.15 }, 'Music_dynamic_pianissimo.svg': { dyn: 0.25 }, 'Music_dynamic_piano.svg': { dyn: 0.38 },
+  'Music_dynamic_mezzo_piano.svg': { dyn: 0.52 }, 'Music_dynamic_mezzo_forte.svg': { dyn: 0.65 }, 'Music_dynamic_forte.svg': { dyn: 0.8 },
+  'Music_dynamic_fortissimo.svg': { dyn: 0.92 }, 'Music_dynamic_fortississimo.svg': { dyn: 1 },
+  'Music_expression_sforzando_sfz.svg': { vol: 1.8 }, 'Music_dynamic_fortepiano.svg': { fp: true },
+  'Music-staccato.svg': { len: 0.5 }, 'Music-staccatissimo.svg': { len: 0.25 }, 'Music-tenuto.svg': { len: 1 },
+  'Music-fermata.svg': { hold: 2 }, 'Music-marcato.svg': { vol: 1.5 }, 'Music-strong-marcato.svg': { vol: 1.7, len: 0.75 },
+  'Music-trill.svg': { orn: 'trill' }, 'Music-mordent.svg': { orn: 'mordent' }, 'Music-inverted-mordent.svg': { orn: 'lowerMordent' },
+  'Music-turn-2.svg': { orn: 'turn' }, 'Music-turn_%28inverted%29.png': { orn: 'invTurn' }, 'Music-inverted_turn.png': { orn: 'invTurn' },
+  'Music-breath.svg': { len: 0.7 }, 'Music-caesura.svg': { pause: 0.25 },
+};
+const PLAY_NIENTE = /Niente/i, PLAY_GHOST = /^Ghost note$/;
+const PERC_CLEFS = new Set(['neutral', 'neutralBox', 'single']);
+const voltaPasses = text => {
+  const out = new Set();
+  for (const [, a, b] of String(text || '').matchAll(/(\d+)\s*(?:[.]?\s*[–-]\s*(\d+))?/g)) for (let k = +a; k <= +(b || a); k++) if (k < 50) out.add(k);
+  return out;
+};
+
+// One stave as bars of sounds. Times are in whole notes, except ornament and arpeggio offsets, which are in seconds (spw: seconds per whole note).
+function staveBars(st, spw, level0) {
+  const [n, d] = st.time.split('/').map(Number), cap = n / d, items = st.items, marks = st.marks || [], N = items.length;
+  const at = m => m.a != null ? items.findIndex(it => it.id === m.a) : -1;
+  const clefVar = marks.find(m => m.d === 'clef')?.var, perc = PERC_CLEFS.has(clefVar);
+  const shift = items.map(() => CLEF_SHIFT[clefVar] || 0);
+  const per = items.map(() => ({ len: 0.92, vol: 1, hold: 1, pause: 0, scale: 1, orn: null, arp: false, glide: false, pluck: false, harm: false, ghost: false, fp: false, mute: false }));
+  const levelAt = items.map(() => null), niente = new Set();
+  const range = (m, def) => { const a = at(m); return a < 0 ? [] : [...Array(Math.min(N - 1, a + (m.span ?? def)) - a + 1)].map((_, k) => a + k); };
+  const accs = {}, ties = new Set(), hairpins = [], peds = [];
+  let sord = [];
+  for (const m of marks) {
+    const i = at(m), f = m.u && fileOf(m.u), pi = PLAY_IMG[f];
+    if (m.d === 'ottava') range(m, 2).forEach(k => shift[k] += OTTAVA[m.var] || 0);
+    else if (m.d === 'tie') ties.add(m.a);
+    else if (m.d === 'slur') range(m, 1).forEach(k => per[k].len = Math.max(per[k].len, 1.02));
+    else if (m.d === 'tuplet') { const r = range(m, 2), num = m.num || 3, base = 2 ** Math.floor(Math.log2(num - 0.5)); r.forEach(k => per[k].scale = base / num); }
+    else if (m.d === 'gliss' && i >= 0) per[i].glide = true;
+    else if (m.d === 'arpeggio' && i >= 0) per[i].arp = true;
+    else if (m.d === 'cresc' || m.d === 'dim') hairpins.push({ r: range(m, 1), up: m.d === 'cresc' });
+    else if (m.d === 'ped' && i >= 0) peds.push({ i, down: m.var !== 'up' });
+    else if (m.d === 'pedline') { const r = range(m, 2); if (r.length) peds.push({ i: r[0], down: true }, { i: r[r.length - 1], down: false, after: true }); }
+    else if (m.d === 'bow' && i >= 0) {
+      if (m.var === 'lh' || m.var === 'snap') { per[i].pluck = true; per[i].len = 0.3; if (m.var === 'snap') per[i].vol *= 1.6; }
+      else if (m.var === 'harmonic') per[i].harm = true;
+      else if (m.var === 'down') per[i].vol *= 1.12;
+      else if (m.var === 'con' || m.var === 'senza') sord.push({ i, on: m.var === 'con' });
+    }
+    else if (m.u && f in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[f] });
+    else if (i < 0) continue;
+    else if (pi) {
+      const p = per[i];
+      if (pi.dyn != null) levelAt[i] = pi.dyn;
+      if (pi.vol) p.vol *= pi.vol;
+      if (pi.len != null) p.len = pi.len === 1 ? Math.max(p.len, 1) : Math.min(p.len, pi.len);
+      if (pi.hold) p.hold = pi.hold;
+      if (pi.pause) p.pause += pi.pause;
+      if (pi.orn) p.orn = pi.orn;
+      if (pi.fp) { p.fp = true; levelAt[i] = 0.38; }
+    }
+    else if (m.n && PLAY_NIENTE.test(m.n)) niente.add(i);
+    else if (m.n && PLAY_GHOST.test(m.n)) per[i].ghost = true;
   }
-  const accs = {}, ties = new Set(marks.filter(m => m.d === 'tie').map(m => m.a));
-  for (const m of marks) if (m.u && fileOf(m.u) in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[fileOf(m.u)] });
-  const events = [];
-  let t = 0, fill = 0, carry = {};
+  // loudness of each note: dynamics last until the next one; hairpins slide towards the next dynamic (or a step louder/softer)
+  const level = [];
+  let cur = level0;
+  for (let i = 0; i < N; i++) { if (levelAt[i] != null) cur = levelAt[i]; level.push(cur); }
+  for (const h of hairpins) {
+    if (h.r.length < 1) continue;
+    const a = h.r[0], b = h.r[h.r.length - 1], from = level[a];
+    let next = -1;
+    for (let k = b; k < Math.min(N, b + 3); k++) if (levelAt[k] != null && k > a) { next = k; break; }
+    const to = next >= 0 ? levelAt[next] : Math.max(0.1, Math.min(1, from + (h.up ? 0.22 : -0.22)));
+    for (let k = a; k <= b; k++) level[k] = from + (to - from) * (k - a) / Math.max(1, b - a);
+    for (let k = b + 1; k < N && levelAt[k] == null; k++) level[k] = to;
+  }
+  for (const i of niente) for (let k = i; k < N; k++) level[k] = k === i ? level[k] : 0;
+  sord.sort((x, y) => x.i - y.i);
+  const muted = items.map((_, i) => { let on = false; for (const s of sord) if (s.i <= i) on = s.on; return on; });
+
+  // pitches: key signature, accidentals carried to the end of the bar, clef and ottava shifts
+  let carry = {};
+  const midiOf = (p, ii, alterOverride) => {
+    const letter = ((p % 7) + 7) % 7;
+    const alter = alterOverride ?? (p in carry ? carry[p] : keyAlter(st.key || 0, letter));
+    return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + alter + shift[ii];
+  };
+  // time of each item (tuplets squeeze, fermatas and caesuras stretch) and the bar it sits in, split like the layout does
+  const bars = [{ len: 0, events: [], t0: 0 }], times = [];
+  let t = 0, fill = 0;
   items.forEach((it, ii) => {
-    const dur = it.dur === 'measure' ? cap * (it.count || 4) : itemVal(it);
+    const p = per[ii], nominal = it.dur === 'measure' ? cap * (it.count || 4) : itemVal(it), dur = nominal * p.scale * p.hold;
+    times.push(t);
+    const ev = { ii, t: t - bars[bars.length - 1].t0, adv: dur + p.pause, sounds: [], len: dur * p.len };
     if (it.kind === 'note') {
-      const midis = pitchesOf(it).map((p, pi) => {
-        const letter = ((p % 7) + 7) % 7, acc = accs[it.id]?.find(a => a.pi === pi);
-        let alter;
-        if (acc) carry[p] = alter = acc.alter;           // an accidental lasts to the end of the bar
-        else alter = p in carry ? carry[p] : keyAlter(st.key || 0, letter);
-        return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + alter + shift[ii];
+      const ps = pitchesOf(it), vol = (level[ii] / 0.65) * 0.5 * p.vol * (p.ghost ? 0.4 : 1) * (muted[ii] ? 0.55 : 1) / Math.sqrt(ps.length);
+      const midis = ps.map((q, pi) => { const acc = accs[it.id]?.find(a => a.pi === pi); if (acc) carry[q] = acc.alter; return midiOf(q, ii); });
+      ev.midis = midis; ev.tie = ties.has(it.id);
+      const order = midis.map((m, k) => k).sort((x, y) => midis[x] - midis[y]);
+      order.forEach((k, rank) => {
+        const s = { midi: midis[k] + (p.harm ? 12 : 0), off: p.arp ? rank * 0.06 : 0, vol: p.harm ? vol * 0.6 : vol, pluck: p.pluck, harm: p.harm, perc, muted: muted[ii], fp: p.fp };
+        if (p.orn && k === 0) {
+          // ornaments use the diatonic neighbours, in the key
+          const up = midiOf(ps[0] + 1, ii), down = midiOf(ps[0] - 1, ii), sec = dur * spw, nn = Math.max(0.045, Math.min(0.09, sec / 8));
+          const seq = p.orn === 'trill' ? [...Array(Math.max(2, Math.floor(sec * p.len / nn)))].map((_, j) => j % 2 ? up : midis[0])
+            : p.orn === 'mordent' ? [midis[0], up] : p.orn === 'lowerMordent' ? [midis[0], down]
+            : p.orn === 'turn' ? [up, midis[0], down] : [down, midis[0], up];
+          s.orn = seq.map((m, j) => ({ midi: m, off: j * nn, len: nn }));
+          s.ornEnd = seq.length * nn; s.trill = p.orn === 'trill';
+        }
+        ev.sounds.push(s);
       });
-      events.push({ t, dur, midis, ii, tie: ties.has(it.id) });
-    } else events.push({ t, dur, midis: [], ii });
-    t += dur;
-    fill += it.dur === 'measure' ? cap : dur;
-    if (fill >= cap - 1e-9) { fill = 0; carry = {}; }
+    }
+    bars[bars.length - 1].events.push(ev);
+    t += ev.adv;
+    fill += it.dur === 'measure' ? cap : nominal;
+    if (fill >= cap - 1e-9 && ii < N - 1) { bars.push({ len: 0, events: [], t0: t }); fill = 0; carry = {}; }
   });
-  // a tie joins a note to the next one of the same pitch: one longer sound
-  for (let i = 0; i < events.length - 1; i++) {
-    const a = events[i], b = events[i + 1];
-    if (a.tie && b.midis.length && b.midis.join() === a.midis.join()) { a.dur += b.dur; b.silent = true; }
+  bars.forEach((b, k) => b.len = (k < bars.length - 1 ? bars[k + 1].t0 : t) - b.t0);
+  // ties: one longer sound; glissandi: slide to the next note's pitch
+  const evs = bars.flatMap(b => b.events);
+  for (let k = 0; k < evs.length - 1; k++) {
+    const a = evs[k], b = evs[k + 1];
+    if (a.tie && b.midis && a.midis && b.midis.join() === a.midis.join()) { a.len = (times[b.ii] - times[a.ii]) + b.len; b.silent = true; }
+    if (per[a.ii].glide && a.sounds.length && b.midis) a.sounds.forEach(s => s.glideTo = b.midis[0] + (s.harm ? 12 : 0));
   }
-  return { events, length: t };
+  // sustain pedal: notes ring until the pedal comes up
+  peds.sort((x, y) => x.i - y.i || (x.down ? 1 : -1));
+  const release = items.map(() => null);
+  let downAt = null;
+  const upTime = pd => pd.after ? times[pd.i] + (evs.find(e => e.ii === pd.i)?.adv || 0) : times[pd.i];
+  for (const pd of peds) {
+    if (pd.down) { if (downAt != null) for (let k = downAt; k < pd.i; k++) release[k] = times[pd.i]; downAt = pd.i; }
+    else if (downAt != null) { for (let k = downAt; k < N && times[k] < upTime(pd); k++) release[k] = upTime(pd); downAt = null; }
+  }
+  if (downAt != null) for (let k = downAt; k < N; k++) release[k] = t;
+  for (const e of evs) if (release[e.ii] != null) e.len = Math.max(e.len, release[e.ii] - times[e.ii]);
+  return { bars, endLevel: level[N - 1] ?? level0 };
+}
+// Bar-level directions of a stave: repeats, endings, segno/coda, D.C./D.S./Fine/To Coda, simile
+function staveFlow(st, nb) {
+  const f = [...Array(nb)].map(() => ({}));
+  const clamp = k => Math.max(0, Math.min(nb - 1, k));
+  if (st.startRepeat) f[0].repStart = true;
+  if (st.end === 'repeat') f[nb - 1].repEnd = true;
+  for (const m of st.marks || []) {
+    const k = m.bar ?? 0;
+    if (m.d === 'repStart' && k < nb) f[clamp(k)].repStart = true;
+    else if (m.d === 'repEnd') f[clamp(k - 1)].repEnd = true;
+    else if (m.d === 'volta') { const ps = voltaPasses(m.text); for (let j = k; j < Math.min(nb, k + (m.span ?? 1)); j++) f[j].volta = ps; }
+    else if (m.d === 'segno') f[clamp(k)].segno = true;
+    else if (m.d === 'coda') (f[clamp(k)].codas = f[clamp(k)].codas || []).push(true);
+    else if (m.d === 'simile1') f[clamp(k)].simile = 1;
+    else if (m.d === 'simile2') { f[clamp(k)].simile = 2; if (k - 1 >= 0) f[clamp(k - 1)].simile = 2; }
+    else if (m.d === 'dir') {
+      const t = m.text || '', b = f[clamp(k - 1)];
+      if (/to\s*coda/i.test(t)) b.toCoda = true;
+      else if (/d\.?\s*c\.?/i.test(t) || /da\s*capo/i.test(t)) b.jump = { to: 'start', fine: /fine/i.test(t), coda: /coda/i.test(t) };
+      else if (/d\.?\s*s\.?/i.test(t) || /dal\s*segno/i.test(t)) b.jump = { to: 'segno', fine: /fine/i.test(t), coda: /coda/i.test(t) };
+      else if (/^\s*fine\s*$/i.test(t)) b.fine = true;
+    }
+  }
+  return f;
+}
+// The whole score as one list of bars: staves joined by a brace or bracket sound together; the rest follow one another
+function scoreBars(spw) {
+  const out = [], lastLevel = [];
+  let si = 0;
+  while (si < state.staves.length) {
+    let last = si;
+    while (state.staves[last].join && last + 1 < state.staves.length) last++;
+    const parts = [];
+    for (let k = si; k <= last; k++) {
+      const st = state.staves[k], { bars, endLevel } = staveBars(st, spw, lastLevel[k - si] ?? 0.65);
+      lastLevel[k - si] = endLevel;
+      parts.push({ si: k, bars, flow: staveFlow(st, bars.length) });
+    }
+    const nb = Math.max(...parts.map(p => p.bars.length));
+    for (let b = 0; b < nb; b++) {
+      const flags = {}, voices = [];
+      for (const p of parts) {
+        const fl = p.flow[b] || {};
+        for (const key in fl) if (key === 'codas') flags.codas = (flags.codas || 0) + fl.codas.length; else flags[key] = flags[key] || fl[key];
+        let bar = p.bars[b];
+        if (!bar) continue;
+        // a simile bar with no notes of its own plays the bar (or two) before it again
+        const empty = x => x && !x.events.some(e => e.sounds.length);
+        if (fl.simile === 1 && empty(bar) && p.bars[b - 1]) bar = { ...p.bars[b - 1] };
+        if (fl.simile === 2 && empty(bar) && p.bars[b - 2]) bar = { ...p.bars[b - 2] };
+        voices.push({ si: p.si, bar });
+      }
+      out.push({ len: Math.max(0, ...voices.map(v => v.bar.len)), voices, ...flags });
+    }
+    si = last + 1;
+  }
+  return out;
+}
+// The order bars are heard in: repeats (with 1st/2nd endings), then D.C./D.S. back to the start or segno, on to Fine or the coda
+function playOrder(bars) {
+  const order = [], taken = {}, segno = bars.findIndex(b => b.segno);
+  const codaBars = bars.flatMap((b, i) => Array(b.codas || 0).fill(i)), hasToCoda = bars.some(b => b.toCoda), hasFine = bars.some(b => b.fine);
+  const codaTo = codaBars.length ? codaBars[codaBars.length - 1] : -1;
+  // without "To Coda" written, the first of two coda signs is where to leave from (at that barline)
+  const leaveAt = !hasToCoda && codaBars.length > 1 ? codaBars[0] : -1;
+  const lastEnding = Math.max(1, ...bars.flatMap(b => b.volta ? [...b.volta] : []));
+  let pos = 0, start = 0, pass = 1, returning = false, jumped = null;
+  while (pos < bars.length && order.length < 4000) {
+    const b = bars[pos];
+    if (jumped && jumped.coda && pos === leaveAt && pos !== codaTo) { pos = codaTo; continue; }
+    if ((b.repStart || pos === 0) && !jumped) { if (!returning) pass = 1; returning = false; start = pos; }
+    if (b.volta && !b.volta.has(pass)) { pos++; continue; }
+    order.push(pos);
+    if (jumped && jumped.fine && b.fine) break;
+    if (jumped && jumped.coda && b.toCoda && codaTo > pos) { pos = codaTo; continue; }
+    if (b.repEnd && !jumped) {
+      // with endings, go round again while a later ending is still to come; without, repeat once
+      const next = bars[pos + 1]?.volta, again = b.volta || next ? Math.max(...(next || b.volta)) > pass : !taken[pos];
+      if (again) { taken[pos] = true; pass++; returning = true; pos = start; continue; }
+      taken[pos] = false;
+    }
+    if (b.jump && !jumped) {
+      jumped = { ...b.jump, fine: b.jump.fine || (!b.jump.coda && hasFine) };
+      // after the jump, repeats are not taken again and the last ending is played
+      pos = b.jump.to === 'segno' && segno >= 0 ? segno : 0; pass = lastEnding; continue;
+    }
+    pos++;
+  }
+  return order;
 }
 
 // Tempo: the box next to Play once someone types in it, otherwise the first metronome mark, otherwise 100
@@ -1603,51 +1797,72 @@ function startPlayback() {
   if (!AC) return toast('This browser cannot play audio.');
   // tempo from the first metronome mark, else 100 crotchets a minute
   const { beat, bpm } = tempo();
-  const secPerWhole = 60 / bpm / beat;
+  const spw = 60 / bpm / beat;
   const ctx = new AC(), out = ctx.createDynamicsCompressor(), master = ctx.createGain();
   master.gain.value = 0.35; master.connect(out); out.connect(ctx.destination);
   player = { ctx, timers: [] };
   const b = document.getElementById('play');
   b.textContent = '■ Stop'; b.classList.add('on');
   const t0 = ctx.currentTime + 0.12;
-  const voice = (midi, at, dur, vol) => {
-    const f = 440 * Math.pow(2, (midi - 69) / 12), g = ctx.createGain(), o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain();
+  let noise = null;
+  const voice = (midi, at, dur, vol, o = {}) => {
+    const f = 440 * Math.pow(2, (midi - 69) / 12), g = ctx.createGain();
     vol *= loudness(f);
-    // small speakers barely play low fundamentals, so low notes get more of the octave-up partial, which they can play
-    o1.type = 'triangle'; o1.frequency.value = f; o2.type = 'sine'; o2.frequency.value = f * 2;
-    g2.gain.value = 0.25 + 0.55 * Math.min(1, Math.max(0, (262 - f) / 200));
-    o1.connect(g); o2.connect(g2); g2.connect(g); g.connect(master);
+    if (vol < 1e-3) return;  // after niente
     const end = at + Math.max(0.05, dur - 0.02);
-    g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(vol, at + 0.012);
-    g.gain.exponentialRampToValueAtTime(vol * 0.45, at + 0.35); g.gain.setValueAtTime(vol * 0.45, end);
-    g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18);
-    for (const o of [o1, o2]) { o.start(at); o.stop(end + 0.2); }
+    if (o.perc) {
+      // unpitched staves: a noise hit, higher notes brighter
+      if (!noise) { noise = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate); const ch = noise.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1; }
+      const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter();
+      src.buffer = noise; bp.type = 'bandpass'; bp.frequency.value = Math.min(9000, f * 4); bp.Q.value = 1.2;
+      src.connect(bp); bp.connect(g); g.connect(master);
+      g.gain.setValueAtTime(vol * 2.2, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.18);
+      src.start(at); src.stop(at + 0.2);
+      return;
+    }
+    const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(), g2 = ctx.createGain();
+    // small speakers barely play low fundamentals, so low notes get more of the octave-up partial, which they can play
+    o1.type = o.harm ? 'sine' : 'triangle'; o2.type = 'sine';
+    g2.gain.value = o.harm ? 0.05 : 0.25 + 0.55 * Math.min(1, Math.max(0, (262 - f) / 200));
+    for (const [osc, k] of [[o1, 1], [o2, 2]]) {
+      osc.frequency.setValueAtTime(f * k, at);
+      if (o.glideTo != null) osc.frequency.exponentialRampToValueAtTime(440 * Math.pow(2, (o.glideTo - 69) / 12) * k, end);
+    }
+    let tail = g;
+    if (o.muted) { const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1100; g.connect(lp); tail = lp; }
+    o1.connect(g); o2.connect(g2); g2.connect(g); tail.connect(master);
+    g.gain.setValueAtTime(0, at);
+    if (o.pluck) { g.gain.linearRampToValueAtTime(vol * 1.3, at + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, at + Math.min(0.5, dur + 0.25)); }
+    else if (o.fp) { g.gain.linearRampToValueAtTime(vol * 1.6, at + 0.012); g.gain.exponentialRampToValueAtTime(vol * 0.3, at + 0.2); g.gain.setValueAtTime(vol * 0.3, end); g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18); }
+    else { g.gain.linearRampToValueAtTime(vol, at + 0.012); g.gain.exponentialRampToValueAtTime(vol * 0.45, at + 0.35); g.gain.setValueAtTime(vol * 0.45, end); g.gain.exponentialRampToValueAtTime(0.0001, end + 0.18); }
+    for (const osc of [o1, o2]) { osc.start(at); osc.stop(Math.max(end, at + 0.5) + 0.2); }
   };
   const glow = (si, ii, at, dur) => {
     const ms = (at - ctx.currentTime) * 1000;
     player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.add('playing'), ms));
     player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.remove('playing'), ms + dur * 1000 - 30));
   };
-  // staves joined by a brace or bracket play together; otherwise each one follows the last
-  let cursor = t0, si = 0;
-  while (si < state.staves.length) {
-    let last = si;
-    while (state.staves[last].join && last + 1 < state.staves.length) last++;
-    let len = 0;
-    for (let k = si; k <= last; k++) {
-      const { events, length } = staveEvents(state.staves[k]);
-      len = Math.max(len, length);
-      for (const e of events) {
-        const at = cursor + e.t * secPerWhole, dur = e.dur * secPerWhole;
-        if (!e.silent) e.midis.forEach(m => voice(m, at, dur, 0.5 / Math.sqrt(e.midis.length)));
-        glow(k, e.ii, at, e.silent ? 0 : dur);
+  const bars = scoreBars(spw);
+  let cursor = t0;
+  for (const k of playOrder(bars)) {
+    const bar = bars[k];
+    for (const { si, bar: vb } of bar.voices) for (const e of vb.events) {
+      const at = cursor + e.t * spw, len = e.len * spw;
+      if (!e.silent) for (const s of e.sounds) {
+        let st = at + s.off, rest = len - s.off;
+        if (s.orn) {
+          for (const n of s.orn) voice(n.midi, st + n.off, n.len * 1.05, s.vol, s);
+          if (s.trill) continue;  // a trill fills the whole note
+          st += s.ornEnd; rest -= s.ornEnd;
+        }
+        voice(s.midi, st, Math.max(0.06, rest), s.vol, s);
       }
+      glow(si, e.ii, at, e.silent ? 0 : Math.max(0.05, e.adv * spw));
     }
-    cursor += len * secPerWhole;
-    si = last + 1;
+    cursor += bar.len * spw;
   }
   if (cursor === t0) { stopPlayback(); return toast('Add some notes first.'); }
-  player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 300));
+  player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 600));
 }
 // ---------- Staves code: Kasra's text notation for a score, one stave per line (codes follow the library, top to bottom) ----------
 const LANG = (() => {
