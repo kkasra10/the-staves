@@ -1690,7 +1690,8 @@ function staveBars(st, spw, level0) {
   return { bars, endLevel: level[N - 1] ?? level0 };
 }
 // Bar-level directions of a stave: repeats, endings, segno/coda, D.C./D.S./Fine/To Coda, simile
-function staveFlow(st, nb) {
+function staveFlow(st, bars) {
+  const nb = bars.length, empty = j => bars[j] && !bars[j].events.some(e => e.sounds.length);
   const f = [...Array(nb)].map(() => ({}));
   const clamp = k => Math.max(0, Math.min(nb - 1, k));
   if (st.startRepeat) f[0].repStart = true;
@@ -1703,7 +1704,8 @@ function staveFlow(st, nb) {
     else if (m.d === 'segno') f[clamp(k)].segno = true;
     else if (m.d === 'coda') (f[clamp(k)].codas = f[clamp(k)].codas || []).push(true);
     else if (m.d === 'simile1') f[clamp(k)].simile = 1;
-    else if (m.d === 'simile2') { f[clamp(k)].simile = 2; if (k - 1 >= 0) f[clamp(k - 1)].simile = 2; }
+    // the two-bar sign sits on the barline between the two bars it fills, or at the start of the first of them
+    else if (m.d === 'simile2') { const a = k >= 1 && empty(k - 1) ? k - 1 : k; for (const j of [a, a + 1]) if (j < nb) f[j].simile = 2; }
     else if (m.d === 'dir') {
       const t = m.text || '', b = f[clamp(k - 1)];
       if (/to\s*coda/i.test(t)) b.toCoda = true;
@@ -1725,7 +1727,7 @@ function scoreBars(spw) {
     for (let k = si; k <= last; k++) {
       const st = state.staves[k], { bars, endLevel } = staveBars(st, spw, lastLevel[k - si] ?? 0.65);
       lastLevel[k - si] = endLevel;
-      parts.push({ si: k, bars, flow: staveFlow(st, bars.length) });
+      parts.push({ si: k, bars, flow: staveFlow(st, bars) });
     }
     const nb = Math.max(...parts.map(p => p.bars.length));
     for (let b = 0; b < nb; b++) {
