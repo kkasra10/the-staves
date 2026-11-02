@@ -71,6 +71,13 @@
     color: var(--muted); font: 600 15px Inter, sans-serif; cursor: pointer; }
   .add-stave:hover { border-color: var(--accent); color: var(--accent); }
   .hint { color: var(--muted); font-size: 13px; text-align: center; margin-top: 18px; line-height: 1.8; }
+  .live { background: var(--paper); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 16px; padding: 10px; }
+  .live textarea { width: 100%; min-height: 140px; resize: vertical; box-sizing: border-box; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    background: var(--bg); color: var(--ink); font: 14px/1.6 ui-monospace, Menlo, monospace; tab-size: 2; }
+  .live textarea:focus { outline: none; border-color: var(--accent); }
+  .live .status { font: 13px Inter, sans-serif; margin-top: 6px; min-height: 18px; color: var(--muted, #888); }
+  .live .status.err { color: #b91c1c; }
+  .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   kbd { font: 12px ui-monospace, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; background: var(--paper); }
   .toast { position: fixed; bottom: 20px; left: 0; right: 0; margin: 0 auto; width: max-content; max-width: calc(100% - 32px); transform-origin: 0 100%; background: var(--ink); color: var(--bg);
     padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; z-index: 10; }
@@ -219,6 +226,7 @@
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
   <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
   <button class="btn" id="saveFile" title="Download this score as a file">⬇ Save</button>
+  <button class="btn" id="liveToggle" aria-pressed="false" title="Write the score as Staves code; the staves update as you type">✎ Live code</button>
   <button class="btn" id="saveCode" title="Download this score as Staves code (.staves)">⬇ Code</button>
   <button class="btn" id="openFile" title="Open a score file">⬆ Open</button>
   <input type="file" id="fileInput" accept=".json,.staves,.txt,application/json,text/plain" hidden>
@@ -226,6 +234,10 @@
 
 <div class="layout">
 <main>
+  <div class="live" id="live" hidden>
+    <textarea id="liveCode" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" aria-label="Staves code" placeholder="TR$ 4P4 N1 C4 D4 E4 F4 |"></textarea>
+    <div class="status" id="liveStatus"></div>
+  </div>
   <div id="staves"></div>
   <button class="add-stave" id="addStave">+ Add stave</button>
   <p class="hint">Pick a note or rest, then tap a stave at the pitch you want – it's added after the last symbol (or after the selected one).
@@ -949,6 +961,7 @@ function drawStave(svg, stave, si, L) {
 }
 
 function render() {
+  syncLive();
   for (const st of state.staves) for (const it of st.items) lastId = Math.max(lastId, it.id || 0);
   for (const st of state.staves) for (const it of st.items) if (!it.id) it.id = newId();
   save();
@@ -2166,6 +2179,34 @@ document.getElementById('fileInput').onchange = e => { openScore(e.target.files[
 addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
 addEventListener('drop', e => { if (e.dataTransfer?.files.length) { e.preventDefault(); openScore(e.dataTransfer.files[0]); } });
 document.getElementById('play').onclick = startPlayback;
+// Live code: the score as Staves code; typing redraws the staves, and changes made on the staves show up here
+const liveBox = document.getElementById('liveCode'), liveStatus = document.getElementById('liveStatus');
+function syncLive() {
+  if (document.getElementById('live').hidden || document.activeElement === liveBox) return;
+  try { liveBox.value = LANG.write(state); } catch {}
+}
+let liveTimer;
+liveBox.addEventListener('input', () => {
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => {
+    if (!liveBox.value.trim()) { liveStatus.textContent = ''; return; }
+    let next;
+    try { next = cleanScore(LANG.read(liveBox.value)); }
+    catch (err) { liveStatus.textContent = err.message[0].toUpperCase() + err.message.slice(1); liveStatus.className = 'status err'; return; }
+    liveStatus.textContent = 'Up to date'; liveStatus.className = 'status';
+    sel = selMark = null;
+    commit(() => state = next);
+  }, 350);
+});
+liveBox.addEventListener('blur', syncLive);
+liveBox.addEventListener('keydown', e => e.stopPropagation());  // typing here is not a keyboard shortcut
+document.getElementById('liveToggle').onclick = () => {
+  const panel = document.getElementById('live'), open = panel.hidden;
+  panel.hidden = !open;
+  document.getElementById('liveToggle').setAttribute('aria-pressed', open);
+  liveStatus.textContent = ''; liveStatus.className = 'status';
+  if (open) { syncLive(); liveBox.focus(); }
+};
 document.getElementById('tempo').onchange = e => {
   const v = Math.round(+e.target.value);
   tempoOverride = v >= 20 && v <= 400 ? v : null;
