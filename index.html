@@ -1922,7 +1922,7 @@ const LANG = (() => {
     ...Object.fromEntries(Object.entries(DIRS).map(([c, t]) => [c, nat('dir', { text: t })])) };
   const ENDS_CODE = { '|': 'single', '||': 'double', '|]': 'final', ':||]': 'repeat' };
   const OTT = { '8va': '8va', '8vb': '8vb', '15va': '15ma', '15vb': '15mb' };
-  const same = (a, b) => (a.d ? a.d === b.d && (a.var || '') === (b.var || '') && (a.text || '') === (b.text || '') : a.u ? a.u === b.u : a.t === b.t && a.g === b.g);
+  const same = (a, b) => (a.d ? a.d === b.d && (a.var || '') === (b.var || '') && (a.text || '') === (b.text || '') : a.u ? a.u === b.u : a.t === b.t);
   const codeOf = (table, m) => Object.keys(table).find(c => same(table[c], m));
   const LETTERS = 'CDEFGAB';
 
@@ -2070,7 +2070,7 @@ const LANG = (() => {
         } else if (m.d === 'metronome') before[i].push(`MM(N${m.unit === 'half' ? 2 : 1}${m.dotted ? '.' : ''})=${m.bpm || 120}`);
         else if ((c = codeOf(MODS, m))) mods[i].push({ c, pi: ACCS.has(c) ? m.pi || 0 : 0 });
         else if ((c = codeOf(SOLO, m))) before[i].push(c);
-        else if (m.g === 'Fingering') mods[i].push({ c: '_' + m.t, pi: 0 });
+        else if (m.t && [...m.t].length === 1) mods[i].push({ c: '_' + m.t, pi: 0 });  // fingering
       }
       let cur = null;
       for (let i = 0; i <= n; i++) {
