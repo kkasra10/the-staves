@@ -497,7 +497,7 @@ const NATIVE = {
   } },
   ped: { anchor: 'note', draw(g, m, E) {
     const i = E.idx(m); if (i < 0) return null;
-    const n = E.note(i), y = Math.max(yOf(8) + 34, n.bot + 24);
+    const n = E.note(i), y = Math.max(yOf(8) + 46, n.bot + 36);
     if (m.var === 'up') txt(g, n.x, y + 4, '✱', { size: 16, italic: false, bold: false });
     else txt(g, n.x - 10, y, 'Ped.', { size: 16, anchor: 'start' });
     return box(n.x - 12, y - 14, n.x + (m.var === 'up' ? 12 : 30), y + 6);
@@ -541,8 +541,8 @@ const NATIVE = {
     txt(g, x0 + 5, y + 14, m.text || '1.', { italic: false, size: 13, anchor: 'start' });
     return box(x0, y, x1, y + 18);
   } },
-  segno: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-1.2), '\u{1D10B}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 11, yOf(-6), x + 11, yOf(-1)); } },
-  coda: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-1.2), '\u{1D10C}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 12, yOf(-6), x + 12, yOf(-1)); } },
+  segno: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-4), '\u{1D10B}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 11, yOf(-8.8), x + 11, yOf(-3.8)); } },
+  coda: { anchor: 'bar', draw(g, m, E) { const x = barX(m, E) + 12; txt(g, x, yOf(-4), '\u{1D10C}', { font: 'Noto Music', size: 30, italic: false, bold: false }); return box(x - 12, yOf(-8.8), x + 12, yOf(-3.8)); } },
   dir: { anchor: 'bar', edit: m => askText('Text', m.text, 'text'), draw(g, m, E) {
     const x = barX(m, E) - 4, w = (m.text || '').length * 7.5;
     txt(g, x, yOf(-1.8), m.text, { size: 14, anchor: 'end' });
@@ -688,7 +688,7 @@ const PIC_OF = [
 // drawn symbols whose article picture shows just the symbol (the rest are whole examples with notes and stave lines, so stay drawn)
 const NATIVE_PIC_FILE = { cresc: 'Music-crescendo.svg', dim: 'Music-diminuendo.svg', segno: 'SegnoTeken.svg', coda: 'Coda_sign.svg',
   direct: 'Direct_music_symbol_%28Guida%2C_W%C3%A4chter%2C_custos%29.png', 'dir:D.C.': 'Music-dacapo.svg', 'dir:D.S.': 'Music-dalsegno.svg',
-  'bow:con': 'Con_sordino.svg', 'bow:senza': 'Senza_sordino.svg', ped: 'Pedal_Mark_1.svg', 'ped:up': 'Music-pedalup.svg' };
+  ped: 'Pedal_Mark_1.svg', 'ped:up': 'Music-pedalup.svg' };
 const ARTICLE_ITEM = new Map(SYMBOL_GROUPS.flatMap(g => g.items).map(it => [it[1].split('/').pop().replace(/^\d+px-/, ''), it]));
 function nativePic(m) {
   const f = NATIVE_PIC_FILE[m.d === 'dir' ? 'dir:' + m.text : m.var ? m.d + ':' + m.var : m.d] || (!m.var && m.d !== 'dir' ? NATIVE_PIC_FILE[m.d] : null), it = f && ARTICLE_ITEM.get(f);
