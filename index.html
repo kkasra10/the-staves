@@ -478,6 +478,14 @@ const NATIVE = {
     if (v === 'con' || v === 'senza') { txt(g, x, Math.min(yOf(-2), n.top - 8), v === 'con' ? 'con sord.' : 'senza sord.', { size: 13 }); return box(x - 34, y - 26, x + 34, y); }
     return box(x - 8, y - 17, x + 8, y + 1);
   } },
+  stringNo: { anchor: 'note', draw(g, m, E) {
+    // which string to play on: a circled number above the note
+    const i = E.idx(m); if (i < 0) return null;
+    const n = E.note(i), x = n.x, y = Math.min(yOf(-2), n.top - 14);
+    el('circle', { cx: x, cy: y, r: 8, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4 }, g);
+    txt(g, x, y + 4.5, String(m.num || 1), { size: 12, italic: false, font: 'Inter, sans-serif' });
+    return box(x - 9, y - 9, x + 9, y + 9);
+  } },
   ped: { anchor: 'note', draw(g, m, E) {
     const i = E.idx(m); if (i < 0) return null;
     const n = E.note(i), y = Math.max(yOf(8) + 34, n.bot + 24);
@@ -643,6 +651,7 @@ const NATIVE_LIB = {
   'Instrument-specific notation: Bowed string instruments': [
     ['Left-hand pizzicato (+)', '+', mk('bow', { var: 'lh' })], ['Snap pizzicato', '⊙', mk('bow', { var: 'snap' })],
     ['Natural harmonic', '○', mk('bow', { var: 'harmonic' })], ['Up bow', '\u{1D1AB}', mk('bow', { var: 'up' })], ['Down bow', '\u{1D1AA}', mk('bow', { var: 'down' })],
+    ...[1, 2, 3, 4, 5, 6].map(k => [`String number ${k}`, '①②③④⑤⑥'[k - 1], mk('stringNo', { num: k })]),
     ['Con sordino', 'con sord.', mk('bow', { var: 'con' })], ['Senza sordino', 'senza sord.', mk('bow', { var: 'senza' })],
   ],
   'Instrument-specific notation: Pedal marks': [['Engage pedal (Ped.)', 'Ped.', mk('ped')], ['Release pedal (✱)', '✱', mk('ped', { var: 'up' })],
@@ -927,13 +936,62 @@ function layout(stave, minWidth) {
 function pitchToStep(clef, p) { return CLEFS[clef].top - p; }
 function stepToPitch(clef, s) { return CLEFS[clef].top - s; }
 
+// ---------- Tablature: a stave with the TAB clef shows six guitar strings and fret numbers (standard tuning, string 1 = high E) ----------
+const TUNING = [64, 59, 55, 50, 45, 40];
+const tabY = s => yOf(0) + (s - 1) * 2 * STEP;
+const isTab = st => st.lines === 6;
+// sounding MIDI numbers of every note as written (key signature, accidentals to the end of the bar)
+function writtenMidis(st) {
+  const [n, d] = st.time.split('/').map(Number), cap = n / d, accs = {};
+  for (const m of st.marks || []) if (m.u && fileOf(m.u) in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[fileOf(m.u)] });
+  let carry = {}, fill = 0;
+  return st.items.map(it => {
+    let out = [];
+    if (it.kind === 'note') out = pitchesOf(it).map((p, pi) => {
+      const letter = ((p % 7) + 7) % 7, acc = accs[it.id]?.find(a => a.pi === pi);
+      if (acc) carry[p] = acc.alter;
+      return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + (p in carry ? carry[p] : keyAlter(st.key || 0, letter));
+    });
+    fill += it.dur === 'measure' ? cap : itemVal(it);
+    if (fill >= cap - 1e-9) { fill = 0; carry = {}; }
+    return out;
+  });
+}
+// string and fret for each note of a chord: the string the note was entered on if it still fits, else the lowest free fret
+function tabFrets(midis, pref = []) {
+  const used = new Set(), out = [];
+  midis.forEach((m, k) => {
+    const s = pref[k], f = s ? Math.round(m - TUNING[s - 1]) : -1;
+    if (s && f >= 0 && f <= 24 && !used.has(s)) { used.add(s); out[k] = { s, f }; }
+  });
+  midis.map((m, k) => k).sort((a, b) => midis[b] - midis[a]).forEach(k => {
+    if (out[k]) return;
+    let best = null;
+    for (let s = 1; s <= 6; s++) { const f = Math.round(midis[k] - TUNING[s - 1]); if (!used.has(s) && f >= 0 && f <= 24 && (!best || f < best.f)) best = { s, f }; }
+    if (best) used.add(best.s);
+    out[k] = best || { s: midis[k] > 64 ? 1 : 6, f: '?' };
+  });
+  return out;
+}
+// a fret on a string as a written pitch (sharps, or flats in flat keys) and the accidental it needs
+function spellMidi(midi, key) {
+  const pc = ((midi % 12) + 12) % 12, oct = Math.floor(midi / 12) - 1;
+  const [letter, alter] = (key < 0 ? [[0, 0], [1, -1], [1, 0], [2, -1], [2, 0], [3, 0], [4, -1], [4, 0], [5, -1], [5, 0], [6, -1], [6, 0]]
+    : [[0, 0], [0, 1], [1, 0], [1, 1], [2, 0], [3, 0], [3, 1], [4, 0], [4, 1], [5, 0], [5, 1], [6, 0]])[pc];
+  return { p: oct * 7 + letter, alter: alter === keyAlter(key, letter) ? null : alter };
+}
+const accidentalSym = alter => { const grp = SYMBOL_GROUPS.find(g => g.name.endsWith('Common accidentals')).items;
+  const [n, u, iw, ih] = grp.find(it => it[0] === (alter > 0 ? 'Sharp' : alter < 0 ? 'Flat' : 'Natural')); return { u, n, iw, ih }; };
+
 function drawStave(svg, stave, si, L) {
   const W = L.width;
   svg.style.color = 'var(--line)';
   for (const [a, b] of L.over) el('rect', { x: a, y: yOf(-2), width: b - a, height: yOf(10) - yOf(-2), fill: 'var(--over)' }, svg);
   // a percussion clef "on a single-line staff" turns this stave into one line
-  const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : yOf(8);
-  for (let i = 0; i < 5; i++) if (!one || i === 2) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
+  const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : isTab(stave) ? tabY(6) : yOf(8);
+  if (isTab(stave)) for (let s = 1; s <= 6; s++) line(svg, 10, tabY(s), W - 10, tabY(s), 1.2);
+  else for (let i = 0; i < 5; i++) if (!one || i === 2) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
+  if (isTab(stave)) ['T', 'A', 'B'].forEach((c, i) => txt(svg, 30, tabY(1.5 + 2 * i) + 6, c, { size: 17, italic: false, font: 'Inter, sans-serif' }));
   line(svg, 10, T, 10, B, 1.5);
   const c = CLEFS[stave.clef];
   // a clef placed from the library takes the clef's place, so the built-in one is not drawn
@@ -942,7 +1000,7 @@ function drawStave(svg, stave, si, L) {
     clef.textContent = c.glyph;
   }
   // key signature: sharps/flats in the standard order and positions for this clef
-  const ks = stave.key || 0, steps = KEY_STEPS[stave.clef][ks > 0 ? 0 : 1];
+  const ks = isTab(stave) ? 0 : stave.key || 0, steps = KEY_STEPS[stave.clef][ks > 0 ? 0 : 1];  // tab shows frets, not a key
   for (let i = 0; i < Math.abs(ks); i++) {
     const t = el('text', { x: L.keyX + i * 10, y: yOf(steps[i]) + (ks > 0 ? 7 : 3), 'font-family': 'Noto Music', 'font-size': 32, fill: 'currentColor' }, svg);
     t.textContent = ks > 0 ? '\u266F' : '\u266D';
@@ -1027,6 +1085,8 @@ function render() {
     const svg = el('svg', { viewBox: `0 0 ${L.width} ${H}`, width: L.width, height: H, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
     drawStave(svg, stave, si, L);
 
+    // tablature: string and fret of every note
+    const tabM = isTab(stave) && writtenMidis(stave), tab = tabM && stave.items.map((it, i) => tabFrets(tabM[i], it.str));
     // what the drawn symbols need to know about this stave
     const E = {
       stave, L, barXs: [L.musicStart - 8, ...L.bars, L.width - 10],
@@ -1034,6 +1094,7 @@ function render() {
       idx: m => m.a != null ? stave.items.findIndex(it => it.id === m.a) : -1,
       note(ii) {
         const it = stave.items[ii], x = L.items[ii].x;
+        if (tab && it.kind === 'note') { const ys = tab[ii].map(t => tabY(t.s)); return { x, ys, y: ys[0], up: false, top: Math.min(...ys) - 8, bot: Math.max(...ys) + 8 }; }
         if (it.kind === 'rest') return { x, ys: [yOf(4)], y: yOf(4), top: yOf(1), bot: yOf(7), up: false };
         const d = durOf(it.dur), steps = pitchesOf(it).map(p => pitchToStep(stave.clef, p)), ys = steps.map(yOf), { up, len } = stemOf(steps, d);
         return { x, ys, y: ys[0], up, top: Math.min(...ys) - (d.stem && up ? len : 7), bot: Math.max(...ys) + (d.stem && !up ? len : 7) };
@@ -1049,8 +1110,12 @@ function render() {
       const x = L.items[ii].x, steps = it.kind === 'rest' ? [4] : pitchesOf(it).map(p => pitchToStep(stave.clef, p));
       const g = el('g', { class: 'item' + (sel && sel.si === si && sel.ii === ii ? ' sel' : ''), 'data-si': si, 'data-ii': ii }, svg);
       if (it.dur === 'measure') drawMeasureRest(g, x, it.count);
+      else if (tab && it.kind === 'note') tab[ii].forEach(({ s, f }) => {
+        el('rect', { x: x - 8, y: tabY(s) - 6.5, width: 16, height: 13, fill: 'var(--paper)' }, g);
+        txt(g, x, tabY(s) + 4.5, String(f), { size: 13, italic: false, font: 'Inter, sans-serif' });
+      });
       else if (!simileRests.has(ii)) drawSymbol(g, it.kind, it.dur, x, it.kind === 'rest' ? 4 : steps, it.dot, beamedIdx.has(ii));  // a simile bar shows only its sign
-      const ys = it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
+      const ys = tab && it.kind === 'note' ? [E.note(ii).top, E.note(ii).bot] : it.kind === 'rest' ? [yOf(1), yOf(7)] : [yOf(Math.min(...steps)) - 8, yOf(Math.max(...steps)) + 8];
       el('rect', { x: x - (it.dur === 'measure' ? 36 : 13), y: ys[0], width: it.dur === 'measure' ? 72 : 26, height: ys[1] - ys[0], fill: 'transparent' }, g);
       g.addEventListener('pointerenter', () => tool.kind === 'erase' && g.classList.add('hot'));
       g.addEventListener('pointerleave', () => g.classList.remove('hot'));
@@ -1115,6 +1180,7 @@ function render() {
       return { ...geo, y: geo.y + dir * used };
     };
     stave.marks.forEach((m, mi) => {
+      if (tab && m.u && (m.n === 'Tablature' || fileOf(m.u) in ACCIDENTAL)) return;  // tab draws its own TAB letters, and frets already say the pitch
       const g = el('g', { class: 'mark' + (selMark && selMark.si === si && selMark.mi === mi ? ' sel' : '') }, svg);
       let geo;
       if (m.d) {
@@ -1162,6 +1228,14 @@ function render() {
       const r = svg.getBoundingClientRect();
       return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round(((e.clientY - r.top) * (H / r.height) - TOP) / STEP)));
     };
+    const stringAt = e => { const y = svgPoint(e).y; let b = 1; for (let s = 2; s <= 6; s++) if (Math.abs(tabY(s) - y) < Math.abs(tabY(b) - y)) b = s; return b; };
+    // on tab, a tap picks the string and asks for the fret; the note is stored as its pitch (plus an accidental if needed)
+    const tabNote = (e, it) => {
+      const s = stringAt(e), r = askNumber(`Fret on string ${s} (0–24)`, 0, 0, 24, 'f');
+      if (!r) return null;
+      const { p, alter } = spellMidi(TUNING[s - 1] + r.f, stave.key || 0);
+      return { p, s, acc: alter == null ? null : accidentalSym(alter) };
+    };
     const showGhost = e => {
       ghost.innerHTML = '';
       if (tool.kind === 'erase' || e.target.closest('.item, .mark')) return;
@@ -1171,6 +1245,7 @@ function render() {
         return m.d ? NATIVE[m.d].draw(ghost, m, E) : drawMark(ghost, m, placed(m));
       }
       if (tool.dur === 'measure') return drawMeasureRest(ghost, insX + 70, tool.count);
+      if (tab && tool.kind === 'note') { const st = stringAt(e); return txt(ghost, insX, tabY(st) + 5, `string ${st}`, { size: 12, italic: false, font: 'Inter, sans-serif' }); }
       const s = stepAt(e);
       drawSymbol(ghost, tool.kind, tool.dur, insX, s, dotted);
       if (tool.kind === 'note') {
@@ -1202,7 +1277,7 @@ function render() {
             stave.marks = stave.marks.filter(m => !isClefMark(m));
             selMark = { si, mi: stave.marks.length };
             stave.clef = CLEF_OF[tool.sym.n] || (tool.sym.var ? { G: 'treble', F: 'bass' }[tool.sym.var[0]] : null) || stave.clef;
-            stave.lines = tool.sym.var === 'single' ? 1 : 5;
+            stave.lines = tool.sym.var === 'single' ? 1 : tool.sym.n === 'Tablature' ? 6 : 5;
           }
           stave.marks.push({ ...tool.sym, ...snap(tool.sym, svgPoint(e)) });
         });
@@ -1212,6 +1287,17 @@ function render() {
         let t = sel && sel.si === si ? sel.ii : -1;
         if (t < 0) for (let i = stave.items.length - 1; i >= 0; i--) if (stave.items[i].kind === 'note') { t = i; break; }
         const it = stave.items[t];
+        if (it && it.kind === 'note' && tab) {
+          const n = tabNote(e);
+          if (!n) return;
+          sel = { si, ii: t }; selMark = null;
+          return commit(() => {
+            const all = pitchesOf(it), str = all.map((_, k) => (it.str || [])[k] || 0);
+            if (all.includes(n.p)) return;
+            it.ch = [...(it.ch || []), n.p]; it.str = [...str, n.s];
+            if (n.acc) stave.marks.push({ ...n.acc, a: it.id, pi: all.length });
+          });
+        }
         if (it && it.kind === 'note') {
           const p = stepToPitch(stave.clef, stepAt(e));
           sel = { si, ii: t }; selMark = null;
@@ -1226,9 +1312,11 @@ function render() {
       const item = { kind: tool.kind, dur: tool.dur, id: newId() };
       if (tool.count) item.count = tool.count;
       if (dotted && tool.dur !== 'measure') item.dot = true;
-      if (tool.kind === 'note') item.p = stepToPitch(stave.clef, stepAt(e));
+      let acc = null;
+      if (tool.kind === 'note' && tab) { const n = tabNote(e); if (!n) return; item.p = n.p; item.str = [n.s]; acc = n.acc; }
+      else if (tool.kind === 'note') item.p = stepToPitch(stave.clef, stepAt(e));
       reveal = { si, x: insX + itemAdv(item) + 40 };
-      commit(() => stave.items.splice(insAt, 0, item));
+      commit(() => { stave.items.splice(insAt, 0, item); if (acc) stave.marks.push({ ...acc, a: item.id, pi: 0 }); });
       if (sel && sel.si === si) { sel = { si, ii: insAt }; render(); }
     });
 
@@ -1334,7 +1422,7 @@ function removeMark(si, mi) {
   selMark = null;
   commit(() => {
     const st = state.staves[si], [gone] = st.marks.splice(mi, 1);
-    if (gone && gone.var === 'single') st.lines = 5;
+    if (gone && (gone.var === 'single' || gone.n === 'Tablature')) st.lines = 5;
   });
 }
 function editSelected() {
@@ -1928,6 +2016,7 @@ const LANG = (() => {
     '^+': nat('bow', { var: 'lh' }), '^(.)': nat('bow', { var: 'snap' }), '^()': nat('bow', { var: 'harmonic' }), '^UB': nat('bow', { var: 'up' }),
     '^DB': nat('bow', { var: 'down' }), '^CNSR': nat('bow', { var: 'con' }), '^SNSR': nat('bow', { var: 'senza' }),
     _PED: nat('ped'), _RPED: nat('ped', { var: 'up' }),
+    ...Object.fromEntries([1, 2, 3, 4, 5, 6].map(k => [`^S${k}`, nat('stringNo', { num: k })])),
   };
   const ACCS = new Set(['b', '#', '§', 'bb', 'x', 'b1^', 'b2^', 'b1^b', 'b2^b', '#^', '##^']);
   // their own word, attached to the note that comes next
@@ -1946,7 +2035,7 @@ const LANG = (() => {
     ...Object.fromEntries(Object.entries(DIRS).map(([c, t]) => [c, nat('dir', { text: t })])) };
   const ENDS_CODE = { '|': 'single', '||': 'double', '|]': 'final', ':||]': 'repeat' };
   const OTT = { '8va': '8va', '8vb': '8vb', '15va': '15ma', '15vb': '15mb' };
-  const same = (a, b) => (a.d ? a.d === b.d && (a.var || '') === (b.var || '') && (a.text || '') === (b.text || '') : a.u ? a.u === b.u : a.t === b.t);
+  const same = (a, b) => (a.d ? a.d === b.d && (a.var || '') === (b.var || '') && (a.text || '') === (b.text || '') && (a.d !== 'stringNo' || a.num === b.num) : a.u ? a.u === b.u : a.t === b.t);
   const codeOf = (table, m) => Object.keys(table).find(c => same(table[c], m));
   const LETTERS = 'CDEFGAB';
 
@@ -2000,7 +2089,7 @@ const LANG = (() => {
           if (st.items.length === 0 && (t === '{' || t === '[')) st.join = t === '{' ? 'brace' : 'bracket';
           else if (own(BASE_CLEFS, t)) st.clef = BASE_CLEFS[t];
           else if (own(CLEF_VARS, t)) { const v = CLEF_VARS[t]; st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push(nat('clef', { var: v })); st.clef = v[0] === 'F' ? 'bass' : 'treble'; st.lines = v === 'single' ? 1 : 5; }
-          else if (t === 'TAB$') { st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push({ ...named('Clefs', 'Tablature'), x: 40 }); }
+          else if (t === 'TAB$') { st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push({ ...named('Clefs', 'Tablature'), x: 40 }); st.lines = 6; }
           else if ((m = t.match(/^K\(([+-]?\d)\)$/))) st.key = Math.max(-7, Math.min(7, +m[1]));
           else if ((m = t.match(/^(\d{1,2})P(\d{1,2})$/))) { st.time = `${+m[1]}/${+m[2]}`; st.timeSym = null; }
           else if (t === 'CT' || t === 'AB') { st.time = t === 'CT' ? '4/4' : '2/2'; st.timeSym = t === 'CT' ? 'C' : 'cut'; }
@@ -2140,7 +2229,7 @@ function cleanMark(m) {
   else if (typeof m.u === 'string' && IMG_PATH.test(m.u)) { o.u = m.u; o.iw = num(m.iw, 1, 1e5, 100); o.ih = num(m.ih, 1, 1e5, 100); }
   else if (typeof m.t === 'string') o.t = m.t.slice(0, 20);
   else return null;
-  const ints = { a: [0, 1e9], pi: [0, 20], span: [0, 64], bar: [0, 999], num: [2, 32], bpm: [10, 400] };
+  const ints = { a: [0, 1e9], pi: [0, 20], span: [0, 64], bar: [0, 999], num: [1, 32], bpm: [10, 400] };
   for (const k in ints) if (m[k] != null) { const v = int(m[k], ...ints[k], undefined); if (v !== undefined) o[k] = v; }
   for (const k of ['x', 'off', 'k']) if (m[k] != null) { const v = num(m[k], -5000, 5000, undefined); if (v !== undefined) o[k] = v; }
   for (const [k, max] of [['n', 80], ['var', 12], ['text', 40]]) if (m[k] != null) o[k] = str(m[k], max);
@@ -2163,6 +2252,7 @@ function cleanScore(data) {
         }
         if (it.dot === true && it.dur !== 'measure') o.dot = true;
         if (it.dur === 'measure') o.count = int(it.count, 1, 999, 4);
+        if (it.kind === 'note' && Array.isArray(it.str)) o.str = it.str.slice(0, 13).map(v => int(v, 0, 6, 0));
         return o;
       });
     return {
@@ -2170,7 +2260,7 @@ function cleanScore(data) {
       time: typeof st.time === 'string' && /^\d{1,2}\/(1|2|4|8|16|32|64)$/.test(st.time) && +st.time.split('/')[0] > 0 ? st.time : '4/4',
       timeSym: st.timeSym === 'C' || st.timeSym === 'cut' ? st.timeSym : null,
       startRepeat: st.startRepeat === true, end: own(ENDS, st.end) ? st.end : 'single',
-      join: st.join === 'brace' || st.join === 'bracket' ? st.join : null, lines: st.lines === 1 ? 1 : 5,
+      join: st.join === 'brace' || st.join === 'bracket' ? st.join : null, lines: st.lines === 1 || st.lines === 6 ? st.lines : 5,
       items, marks: (Array.isArray(st.marks) ? st.marks : []).slice(0, 5000).map(cleanMark).filter(Boolean),
     };
   }) };
