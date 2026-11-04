@@ -685,6 +685,15 @@ const PIC_OF = [
   ['Natural harmonic', 'Music-harmonic.svg'], ['Up bow', 'Music-upbow.svg'], ['Down bow', 'Music-downbow.svg'], ['Con sordino', 'Con_sordino.svg'],
   ['Senza sordino', 'Senza_sordino.svg'], ['Engage pedal', 'Pedal_Mark_1.svg'], ['Release pedal', 'Music-pedalup.svg'], ['Pedal line', 'Music-pedal.svg'],
 ];
+// drawn symbols whose article picture shows just the symbol (the rest are whole examples with notes and stave lines, so stay drawn)
+const NATIVE_PIC_FILE = { cresc: 'Music-crescendo.svg', dim: 'Music-diminuendo.svg', segno: 'SegnoTeken.svg', coda: 'Coda_sign.svg',
+  direct: 'Direct_music_symbol_%28Guida%2C_W%C3%A4chter%2C_custos%29.png', 'dir:D.C.': 'Music-dacapo.svg', 'dir:D.S.': 'Music-dalsegno.svg',
+  'bow:con': 'Con_sordino.svg', 'bow:senza': 'Senza_sordino.svg', ped: 'Pedal_Mark_1.svg', 'ped:up': 'Music-pedalup.svg' };
+const ARTICLE_ITEM = new Map(SYMBOL_GROUPS.flatMap(g => g.items).map(it => [it[1].split('/').pop().replace(/^\d+px-/, ''), it]));
+function nativePic(m) {
+  const f = NATIVE_PIC_FILE[m.d === 'dir' ? 'dir:' + m.text : m.var ? m.d + ':' + m.var : m.d] || (!m.var && m.d !== 'dir' ? NATIVE_PIC_FILE[m.d] : null), it = f && ARTICLE_ITEM.get(f);
+  return it && [it[1], it[2], it[3]];
+}
 const picFor = label => { const hit = PIC_OF.find(([k]) => label === k || label.startsWith(k + ' ')); return hit && ARTICLE_PIC.get(hit[1]); };
 SYMBOL_GROUPS.forEach(g => {
   g.items = g.items.filter(([, u]) => !REPLACED.test(u));
@@ -1243,7 +1252,18 @@ function render() {
       if (tab && m.u && (m.n === 'Tablature' || fileOf(m.u) in ACCIDENTAL)) return;  // tab draws its own TAB letters, and frets already say the pitch
       const g = el('g', { class: 'mark' + (selMark && selMark.si === si && selMark.mi === mi ? ' sel' : '') }, svg);
       let geo;
-      if (m.d) {
+      const pic = m.d && nativePic(m);
+      if (pic) {
+        // the article's own picture, fitted to where the drawn symbol would go
+        const tmp = el('g', {}, svg);
+        geo = NATIVE[m.d].draw(tmp, m, E) || { x: 0, y: 0, w: 0, h: 0 };
+        tmp.remove();
+        const [u, iw, ih] = pic, r = RULES[fileOf(u)] || {}, [i0, j0, i1, j1] = r.ink || [0, 0, 1, 1];
+        const sv = el('svg', { x: geo.x, y: geo.y, width: geo.w, height: geo.h, viewBox: [i0 * iw, j0 * ih, (i1 - i0) * iw, (j1 - j0) * ih].join(' '),
+          preserveAspectRatio: m.d === 'cresc' || m.d === 'dim' ? 'none' : 'xMidYMid meet', overflow: 'hidden' }, g);
+        el('image', { href: imgUrl(u), x: 0, y: 0, width: iw, height: ih, preserveAspectRatio: 'none' }, sv);
+        el('rect', { class: 'box', x: geo.x - PAD, y: geo.y - PAD, width: geo.w + 2 * PAD, height: geo.h + 2 * PAD, fill: 'transparent', rx: 3 }, g);
+      } else if (m.d) {
         geo = (NATIVE[m.d] && NATIVE[m.d].draw(g, m, E)) || { x: 0, y: 0, w: 0, h: 0 };
         el('rect', { class: 'box', x: geo.x - PAD, y: geo.y - PAD, width: geo.w + 2 * PAD, height: geo.h + 2 * PAD, fill: 'transparent', rx: 3 }, g);
       } else {
