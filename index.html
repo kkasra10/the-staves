@@ -937,7 +937,26 @@ function pitchToStep(clef, p) { return CLEFS[clef].top - p; }
 function stepToPitch(clef, s) { return CLEFS[clef].top - s; }
 
 // ---------- Tablature: a stave with the TAB clef shows six guitar strings and fret numbers (standard tuning, string 1 = high E) ----------
-const TUNING = [64, 59, 55, 50, 45, 40];
+// open strings as MIDI numbers, string 1 (drawn at the top) first
+const TUNINGS = {
+  GTR: { name: 'Guitar', m: [64, 59, 55, 50, 45, 40] }, DROPD: { name: 'Guitar, drop D', m: [64, 59, 55, 50, 45, 38] },
+  GTR7: { name: '7-string guitar', m: [64, 59, 55, 50, 45, 40, 35] }, BASS4: { name: 'Bass (4)', m: [43, 38, 33, 28] },
+  BASS5: { name: 'Bass (5)', m: [43, 38, 33, 28, 23] }, UKE: { name: 'Ukulele', m: [69, 64, 60, 67] },
+  MANDO: { name: 'Mandolin', m: [76, 69, 62, 55] }, BANJO: { name: 'Banjo', m: [62, 59, 55, 50, 67] },
+  VLN: { name: 'Violin', m: [76, 69, 62, 55] }, VLA: { name: 'Viola', m: [69, 62, 55, 48] }, VC: { name: 'Cello', m: [57, 50, 43, 36] },
+};
+const tuningOf = st => Array.isArray(st.tuning) && st.tuning.length ? st.tuning : TUNINGS.GTR.m;
+const tuningId = t => Object.keys(TUNINGS).find(k => TUNINGS[k].m.join() === t.join());
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const midiName = m => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+// "E2 A2 D3 G3 B3 E4" (low to high, as players say it) -> open strings, string 1 first
+function parseTuning(text) {
+  const ms = String(text).trim().split(/[\s,]+/).map(t => {
+    const m = t.match(/^([A-Ga-g])([#b]?)(-?\d)$/);
+    return m && 12 * (+m[3] + 1) + [0, 2, 4, 5, 7, 9, 11]['CDEFGAB'.indexOf(m[1].toUpperCase())] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  });
+  return ms.length >= 1 && ms.length <= 10 && ms.every(m => m != null && m >= 0 && m <= 127) ? ms.reverse() : null;
+}
 const tabY = s => yOf(0) + (s - 1) * 2 * STEP;
 const isTab = st => st.lines === 6;
 // sounding MIDI numbers of every note as written (key signature, accidentals to the end of the bar)
@@ -958,18 +977,18 @@ function writtenMidis(st) {
   });
 }
 // string and fret for each note of a chord: the string the note was entered on if it still fits, else the lowest free fret
-function tabFrets(midis, pref = []) {
+function tabFrets(midis, pref = [], tun = TUNINGS.GTR.m) {
   const used = new Set(), out = [];
   midis.forEach((m, k) => {
-    const s = pref[k], f = s ? Math.round(m - TUNING[s - 1]) : -1;
+    const s = pref[k] <= tun.length ? pref[k] : 0, f = s ? Math.round(m - tun[s - 1]) : -1;
     if (s && f >= 0 && f <= 24 && !used.has(s)) { used.add(s); out[k] = { s, f }; }
   });
   midis.map((m, k) => k).sort((a, b) => midis[b] - midis[a]).forEach(k => {
     if (out[k]) return;
     let best = null;
-    for (let s = 1; s <= 6; s++) { const f = Math.round(midis[k] - TUNING[s - 1]); if (!used.has(s) && f >= 0 && f <= 24 && (!best || f < best.f)) best = { s, f }; }
+    for (let s = 1; s <= tun.length; s++) { const f = Math.round(midis[k] - tun[s - 1]); if (!used.has(s) && f >= 0 && f <= 24 && (!best || f < best.f)) best = { s, f }; }
     if (best) used.add(best.s);
-    out[k] = best || { s: midis[k] > 64 ? 1 : 6, f: '?' };
+    out[k] = best || { s: midis[k] > tun[0] ? 1 : tun.length, f: '?' };
   });
   return out;
 }
@@ -988,10 +1007,10 @@ function drawStave(svg, stave, si, L) {
   svg.style.color = 'var(--line)';
   for (const [a, b] of L.over) el('rect', { x: a, y: yOf(-2), width: b - a, height: yOf(10) - yOf(-2), fill: 'var(--over)' }, svg);
   // a percussion clef "on a single-line staff" turns this stave into one line
-  const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : isTab(stave) ? tabY(6) : yOf(8);
-  if (isTab(stave)) for (let s = 1; s <= 6; s++) line(svg, 10, tabY(s), W - 10, tabY(s), 1.2);
+  const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : isTab(stave) ? tabY(tuningOf(stave).length) : yOf(8);
+  if (isTab(stave)) for (let s = 1; s <= tuningOf(stave).length; s++) line(svg, 10, tabY(s), W - 10, tabY(s), 1.2);
   else for (let i = 0; i < 5; i++) if (!one || i === 2) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
-  if (isTab(stave)) ['T', 'A', 'B'].forEach((c, i) => txt(svg, 30, tabY(1.5 + 2 * i) + 6, c, { size: 17, italic: false, font: 'Inter, sans-serif' }));
+  if (isTab(stave)) ['T', 'A', 'B'].forEach((c, i) => txt(svg, 30, tabY(1 + (tuningOf(stave).length - 1) * (i + 0.5) / 3) + 6, c, { size: 17, italic: false, font: 'Inter, sans-serif' }));
   line(svg, 10, T, 10, B, 1.5);
   const c = CLEFS[stave.clef];
   // a clef placed from the library takes the clef's place, so the built-in one is not drawn
@@ -1059,6 +1078,8 @@ function render() {
       <select data-k="key" aria-label="Key signature">${KEYS.map(([k, n]) => `<option value="${k}"${k === (stave.key || 0) ? ' selected' : ''}>${n}</option>`).join('')}</select>
       <select data-k="time" aria-label="Time signature">${opts(Object.fromEntries([...new Set([...TIMES, stave.time])].map(t => [t, t]).concat([['C', 'C (common)'], ['cut', '\u00A2 (cut)'], ['custom', 'Other…']])),
         stave.timeSym || stave.time)}</select>
+      ${isTab(stave) ? `<select data-k="tuning" aria-label="Instrument">${opts(Object.fromEntries([...Object.entries(TUNINGS).map(([k, t]) => [k, t.name]),
+        ['custom', tuningId(tuningOf(stave)) ? 'Custom tuning…' : 'Custom: ' + [...tuningOf(stave)].reverse().map(midiName).join(' ')]]), tuningId(tuningOf(stave)) || 'custom')}</select>` : ''}
       <select data-k="startRepeat" aria-label="Start of line">${opts({ false: 'Plain start', true: 'Left repeat' }, String(stave.startRepeat))}</select>
       <select data-k="end" aria-label="End of line">${opts(ENDS, stave.end)}</select>`;
     head.querySelectorAll('select').forEach(s => s.onchange = () => commit(() => {
@@ -1068,6 +1089,13 @@ function render() {
         else if (s.value === 'cut') { stave.time = '2/2'; stave.timeSym = 'cut'; }
         else if (s.value === 'custom') { const t = askTime(stave.time); if (t) { stave.time = t; stave.timeSym = null; } }
         else { stave.time = s.value; stave.timeSym = null; }
+        return;
+      }
+      if (k === 'tuning') {
+        if (s.value !== 'custom') { stave.tuning = [...TUNINGS[s.value].m]; return; }
+        const v = prompt('Open strings from lowest to highest, e.g. D2 A2 D3 G3 A3 D4', [...tuningOf(stave)].reverse().map(midiName).join(' '));
+        const t = v != null && parseTuning(v);
+        if (t) stave.tuning = t; else if (v != null) toast('Write each string as a note and octave, like E2 A2 D3 G3 B3 E4.');
         return;
       }
       stave[k] = k === 'startRepeat' ? s.value === 'true' : k === 'key' ? +s.value : s.value;
@@ -1086,7 +1114,7 @@ function render() {
     drawStave(svg, stave, si, L);
 
     // tablature: string and fret of every note
-    const tabM = isTab(stave) && writtenMidis(stave), tab = tabM && stave.items.map((it, i) => tabFrets(tabM[i], it.str));
+    const tabM = isTab(stave) && writtenMidis(stave), tab = tabM && stave.items.map((it, i) => tabFrets(tabM[i], it.str, tuningOf(stave)));
     // what the drawn symbols need to know about this stave
     const E = {
       stave, L, barXs: [L.musicStart - 8, ...L.bars, L.width - 10],
@@ -1228,12 +1256,12 @@ function render() {
       const r = svg.getBoundingClientRect();
       return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round(((e.clientY - r.top) * (H / r.height) - TOP) / STEP)));
     };
-    const stringAt = e => { const y = svgPoint(e).y; let b = 1; for (let s = 2; s <= 6; s++) if (Math.abs(tabY(s) - y) < Math.abs(tabY(b) - y)) b = s; return b; };
+    const stringAt = e => { const y = svgPoint(e).y; let b = 1; for (let s = 2; s <= tuningOf(stave).length; s++) if (Math.abs(tabY(s) - y) < Math.abs(tabY(b) - y)) b = s; return b; };
     // on tab, a tap picks the string and asks for the fret; the note is stored as its pitch (plus an accidental if needed)
     const tabNote = (e, it) => {
       const s = stringAt(e), r = askNumber(`Fret on string ${s} (0–24)`, 0, 0, 24, 'f');
       if (!r) return null;
-      const { p, alter } = spellMidi(TUNING[s - 1] + r.f, stave.key || 0);
+      const { p, alter } = spellMidi(tuningOf(stave)[s - 1] + r.f, stave.key || 0);
       return { p, s, acc: alter == null ? null : accidentalSym(alter) };
     };
     const showGhost = e => {
@@ -2089,7 +2117,10 @@ const LANG = (() => {
           if (st.items.length === 0 && (t === '{' || t === '[')) st.join = t === '{' ? 'brace' : 'bracket';
           else if (own(BASE_CLEFS, t)) st.clef = BASE_CLEFS[t];
           else if (own(CLEF_VARS, t)) { const v = CLEF_VARS[t]; st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push(nat('clef', { var: v })); st.clef = v[0] === 'F' ? 'bass' : 'treble'; st.lines = v === 'single' ? 1 : 5; }
-          else if (t === 'TAB$') { st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push({ ...named('Clefs', 'Tablature'), x: 40 }); st.lines = 6; }
+          else if ((m = t.match(/^TAB(?:\(([^)]*)\))?\$$/))) {
+            const tun = !m[1] ? TUNINGS.GTR.m : own(TUNINGS, m[1].toUpperCase()) ? TUNINGS[m[1].toUpperCase()].m : parseTuning(m[1].replace(/_/g, ' ')) || fail(t);
+            st.marks = st.marks.filter(x => !isClefMark(x)); st.marks.push({ ...named('Clefs', 'Tablature'), x: 40 }); st.lines = 6; st.tuning = [...tun];
+          }
           else if ((m = t.match(/^K\(([+-]?\d)\)$/))) st.key = Math.max(-7, Math.min(7, +m[1]));
           else if ((m = t.match(/^(\d{1,2})P(\d{1,2})$/))) { st.time = `${+m[1]}/${+m[2]}`; st.timeSym = null; }
           else if (t === 'CT' || t === 'AB') { st.time = t === 'CT' ? '4/4' : '2/2'; st.timeSym = t === 'CT' ? 'C' : 'cut'; }
@@ -2159,7 +2190,7 @@ const LANG = (() => {
       const ii = m => st.items.findIndex(it => it.id === m.a);
       if (st.join) out.push(st.join === 'brace' ? '{' : '[');
       const cm = st.marks.find(isClefMark);
-      out.push(cm && cm.d ? Object.keys(CLEF_VARS).find(c => CLEF_VARS[c] === cm.var) : cm && cm.n === 'Tablature' ? 'TAB$' : Object.keys(BASE_CLEFS).find(c => BASE_CLEFS[c] === st.clef));
+      out.push(cm && cm.d ? Object.keys(CLEF_VARS).find(c => CLEF_VARS[c] === cm.var) : cm && cm.n === 'Tablature' ? (t => t === 'GTR' ? 'TAB$' : `TAB(${t || [...tuningOf(st)].reverse().map(midiName).join('_')})$`)(tuningId(tuningOf(st))) : Object.keys(BASE_CLEFS).find(c => BASE_CLEFS[c] === st.clef));
       if (st.key) out.push(`K(${st.key > 0 ? '+' : ''}${st.key})`);
       out.push(st.timeSym === 'C' ? 'CT' : st.timeSym === 'cut' ? 'AB' : st.time.replace('/', 'P'));
       if (st.startRepeat) bars[0].push('[||:');
@@ -2252,7 +2283,7 @@ function cleanScore(data) {
         }
         if (it.dot === true && it.dur !== 'measure') o.dot = true;
         if (it.dur === 'measure') o.count = int(it.count, 1, 999, 4);
-        if (it.kind === 'note' && Array.isArray(it.str)) o.str = it.str.slice(0, 13).map(v => int(v, 0, 6, 0));
+        if (it.kind === 'note' && Array.isArray(it.str)) o.str = it.str.slice(0, 13).map(v => int(v, 0, 10, 0));
         return o;
       });
     return {
@@ -2261,6 +2292,7 @@ function cleanScore(data) {
       timeSym: st.timeSym === 'C' || st.timeSym === 'cut' ? st.timeSym : null,
       startRepeat: st.startRepeat === true, end: own(ENDS, st.end) ? st.end : 'single',
       join: st.join === 'brace' || st.join === 'bracket' ? st.join : null, lines: st.lines === 1 || st.lines === 6 ? st.lines : 5,
+      ...(Array.isArray(st.tuning) && st.tuning.length >= 1 && st.tuning.length <= 10 && st.tuning.every(m => Number.isInteger(m) && m >= 0 && m <= 127) ? { tuning: st.tuning.slice() } : {}),
       items, marks: (Array.isArray(st.marks) ? st.marks : []).slice(0, 5000).map(cleanMark).filter(Boolean),
     };
   }) };
