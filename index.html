@@ -276,6 +276,15 @@ const MEASURE = { id: 'measure', name: 'Multi-measure rest', val: 0, adv: 150, f
 const durOf = id => DURS.find(d => d.id === id) || (id === 'measure' ? MEASURE : undefined);
 // A dot lengthens a note or rest by half
 const itemVal = it => durOf(it.dur).val * (it.dot ? 1.5 : 1);
+// notes under a tuplet take less time: 3 in the time of 2, 5 in the time of 4 ... (counted when bars are split, and when played)
+function tupletScales(st) {
+  const f = st.items.map(() => 1);
+  for (const m of st.marks || []) if (m.d === 'tuplet') {
+    const a = st.items.findIndex(it => it.id === m.a), num = m.num || 3, base = 2 ** Math.floor(Math.log2(num - 0.5));
+    if (a >= 0) for (let k = a; k <= Math.min(st.items.length - 1, a + (m.span ?? 2)); k++) f[k] = base / num;
+  }
+  return f;
+}
 const itemAdv = it => Math.round(durOf(it.dur).adv * (it.dot ? 1.35 : 1));
 // Diatonic pitch number: octave * 7 + letter index (C=0). top = pitch on the top staff line.
 const CLEFS = {
@@ -589,10 +598,11 @@ function askText(q, cur, key) {
   return v == null || !v.trim() ? null : { [key]: v.trim().slice(0, 40) };
 }
 function askTime(cur) {
-  const v = prompt('Time signature, e.g. 7/8 or 5/4', cur || '7/8');
+  const v = prompt('Time signature, e.g. 7/8, 5/4, or an irrational one like 4/3', cur || '7/8');
   if (v == null) return null;
   const m = v.trim().match(/^(\d{1,2})\s*\/\s*(\d{1,2})$/);
-  if (!m || +m[1] < 1 || ![1, 2, 4, 8, 16, 32, 64].includes(+m[2])) { toast('Use a number over 1, 2, 4, 8, 16, 32 or 64, like 7/8.'); return null; }
+  // any bottom number: 4/3 or 7/6 are irrational meters (bars of triplet-length beats)
+  if (!m || +m[1] < 1 || +m[2] < 1) { toast('Use two whole numbers like 7/8 or 4/3.'); return null; }
   return `${+m[1]}/${+m[2]}`;
 }
 
@@ -929,11 +939,11 @@ function layout(stave, minWidth) {
   out.musicStart = x - 6;
   // repeat signs placed on inner barlines need room on their side of the barline
   const repAt = d => new Set(stave.marks.filter(m => m.d === d).map(m => m.bar));
-  const repStart = repAt('repStart'), repEnd = repAt('repEnd');
+  const repStart = repAt('repStart'), repEnd = repAt('repEnd'), tup = tupletScales(stave);
   stave.items.forEach((it, ii) => {
     out.items.push({ x: x + 6 + (it.dur === 'measure' ? itemAdv(it) / 2 - 12 : 0) });  // a bar rest sits in the middle of its bar
     x += itemAdv(it);
-    fill += it.dur === 'measure' ? cap : itemVal(it);
+    fill += it.dur === 'measure' ? cap : itemVal(it) * tup[ii];
     const last = ii === stave.items.length - 1;
     if (fill > cap + 1e-9) out.over.push([barStart, x]);
     if (fill >= cap - 1e-9 && !last) {
@@ -981,14 +991,15 @@ function writtenMidis(st) {
   const [n, d] = st.time.split('/').map(Number), cap = n / d, accs = {};
   for (const m of st.marks || []) if (m.u && fileOf(m.u) in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[fileOf(m.u)] });
   let carry = {}, fill = 0;
-  return st.items.map(it => {
+  const tup = tupletScales(st);
+  return st.items.map((it, ii) => {
     let out = [];
     if (it.kind === 'note') out = pitchesOf(it).map((p, pi) => {
       const letter = ((p % 7) + 7) % 7, acc = accs[it.id]?.find(a => a.pi === pi);
       if (acc) carry[p] = acc.alter;
       return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + (p in carry ? carry[p] : keyAlter(st.key || 0, letter));
     });
-    fill += it.dur === 'measure' ? cap : itemVal(it);
+    fill += it.dur === 'measure' ? cap : itemVal(it) * tup[ii];
     if (fill >= cap - 1e-9) { fill = 0; carry = {}; }
     return out;
   });
@@ -1735,7 +1746,8 @@ function staveBars(st, spw, level0) {
   const at = m => m.a != null ? items.findIndex(it => it.id === m.a) : -1;
   const clefVar = marks.find(m => m.d === 'clef')?.var, perc = PERC_CLEFS.has(clefVar);
   const shift = items.map(() => CLEF_SHIFT[clefVar] || 0);
-  const per = items.map(() => ({ len: 0.92, vol: 1, hold: 1, pause: 0, scale: 1, orn: null, arp: false, glide: false, pluck: false, harm: false, ghost: false, fp: false, mute: false }));
+  const tup = tupletScales(st);
+  const per = items.map((_, i) => ({ scale: tup[i], len: 0.92, vol: 1, hold: 1, pause: 0, orn: null, arp: false, glide: false, pluck: false, harm: false, ghost: false, fp: false, mute: false }));
   const levelAt = items.map(() => null), niente = new Set();
   const range = (m, def) => { const a = at(m); return a < 0 ? [] : [...Array(Math.min(N - 1, a + (m.span ?? def)) - a + 1)].map((_, k) => a + k); };
   const accs = {}, ties = new Set(), hairpins = [], peds = [];
@@ -1745,7 +1757,7 @@ function staveBars(st, spw, level0) {
     if (m.d === 'ottava') range(m, 2).forEach(k => shift[k] += OTTAVA[m.var] || 0);
     else if (m.d === 'tie') ties.add(m.a);
     else if (m.d === 'slur') range(m, 1).forEach(k => per[k].len = Math.max(per[k].len, 1.02));
-    else if (m.d === 'tuplet') { const r = range(m, 2), num = m.num || 3, base = 2 ** Math.floor(Math.log2(num - 0.5)); r.forEach(k => per[k].scale = base / num); }
+    else if (m.d === 'tuplet') continue;  // see tupletScales
     else if (m.d === 'gliss' && i >= 0) per[i].glide = true;
     else if (m.d === 'arpeggio' && i >= 0) per[i].arp = true;
     else if (m.d === 'cresc' || m.d === 'dim') hairpins.push({ r: range(m, 1), up: m.d === 'cresc' });
@@ -1824,7 +1836,7 @@ function staveBars(st, spw, level0) {
     }
     bars[bars.length - 1].events.push(ev);
     t += ev.adv;
-    fill += it.dur === 'measure' ? cap : nominal;
+    fill += it.dur === 'measure' ? cap : nominal * p.scale;
     if (fill >= cap - 1e-9 && ii < N - 1) { bars.push({ len: 0, events: [], t0: t }); fill = 0; carry = {}; }
   });
   bars.forEach((b, k) => b.len = (k < bars.length - 1 ? bars[k + 1].t0 : t) - b.t0);
@@ -2311,7 +2323,7 @@ function cleanScore(data) {
       });
     return {
       clef: own(CLEFS, st.clef) ? st.clef : 'treble', key: int(st.key, -7, 7, 0),
-      time: typeof st.time === 'string' && /^\d{1,2}\/(1|2|4|8|16|32|64)$/.test(st.time) && +st.time.split('/')[0] > 0 ? st.time : '4/4',
+      time: typeof st.time === 'string' && /^\d{1,2}\/\d{1,2}$/.test(st.time) && st.time.split('/').every(v => +v > 0) ? st.time : '4/4',
       timeSym: st.timeSym === 'C' || st.timeSym === 'cut' ? st.timeSym : null,
       startRepeat: st.startRepeat === true, end: own(ENDS, st.end) ? st.end : 'single',
       join: st.join === 'brace' || st.join === 'bracket' ? st.join : null, lines: st.lines === 1 || st.lines === 6 ? st.lines : 5,
