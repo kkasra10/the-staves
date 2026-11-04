@@ -659,9 +659,26 @@ const NATIVE_LIB = {
 };
 // images replaced by the drawn symbols above (or not needed: the stave and ledger lines are always drawn)
 const REPLACED = /\/(\d+px-)?(Music-staff\.svg|Music-ledger-edited\.png|Accolade\.svg|Staff-bracket\.jpg|Octaveclef\d?\.(jpg|svg)|Music-GClef2\.jpg|Music-(neutralclef|unpitchedclef|measurerest|timesig|commontime|cuttime|metronome|glissando|triplet|arpeggio|crescendo|diminuendo|repeat|simile|volte|dacapo|dalsegno|pizzicato|snappizzicato|harmonic|upbow|downbow|pedalup|pedal0|pedal)\.svg|Semigarrapatea\.svg|Silencio_de_semigarrapatea\.svg|Compound_duple_drum_pattern\.png|Five-four_time_signature\.png|Tie-music\.png|(One|Two)_octaves?_(up|down)\.jpg|SegnoTeken\.svg|Coda_sign\.svg|Direct_music_symbol.*\.png|Con_sordino\.svg|Senza_sordino\.svg|Pedal_Mark_1\.svg)$/;
+// the drawn symbols keep the article's picture as their button icon
+const ARTICLE_PIC = new Map(SYMBOL_GROUPS.flatMap(g => g.items).map(([, u]) => [u.split('/').pop().replace(/^\d+px-/, ''), u]));
+const PIC_OF = [
+  ['Brace', 'Accolade.svg'], ['Bracket', 'Staff-bracket.jpg'], ['Treble clef, octave lower', 'Octaveclef.svg'], ['Treble clef, octave higher', 'Octaveclef3.jpg'],
+  ['Treble clef, two octaves lower', 'Octaveclef5.jpg'], ['Treble clef, two octaves higher', 'Octaveclef4.jpg'], ['Double treble clef', 'Music-GClef2.jpg'],
+  ['Neutral clef (two bars)', 'Music-neutralclef.svg'], ['Percussion clef', 'Music-unpitchedclef.svg'], ['Multi-measure rest', 'Music-measurerest.svg'],
+  ['Common time', 'Music-commontime.svg'], ['Alla breve', 'Music-cuttime.svg'], ['Metronome mark ♩ =', 'Music-metronome.svg'], ['Tie', 'Tie-music.png'],
+  ['Glissando (wavy)', 'Music-glissando.svg'], ['Triplet', 'Music-triplet.svg'], ['Arpeggiated chord', 'Music-arpeggio.svg'],
+  ['Crescendo (hairpin)', 'Music-crescendo.svg'], ['Diminuendo (hairpin)', 'Music-diminuendo.svg'], ['Ottava alta', 'One_octave_up.jpg'],
+  ['Ottava bassa', 'One_octave_down.jpg'], ['Quindicesima alta', 'Two_octaves_up.jpg'], ['Quindicesima bassa', 'Two_octaves_down.jpg'],
+  ['Start repeat', 'Music-repeat.svg'], ['End repeat', 'Music-repeat.svg'], ['Simile (repeat one bar)', 'Music-simile.svg'], ['First ending', 'Music-volte.svg'],
+  ['D.C.', 'Music-dacapo.svg'], ['D.S.', 'Music-dalsegno.svg'], ['Segno', 'SegnoTeken.svg'], ['Coda', 'Coda_sign.svg'],
+  ['Direct', 'Direct_music_symbol_%28Guida%2C_W%C3%A4chter%2C_custos%29.png'], ['Left-hand pizzicato', 'Music-pizzicato.svg'], ['Snap pizzicato', 'Music-snappizzicato.svg'],
+  ['Natural harmonic', 'Music-harmonic.svg'], ['Up bow', 'Music-upbow.svg'], ['Down bow', 'Music-downbow.svg'], ['Con sordino', 'Con_sordino.svg'],
+  ['Senza sordino', 'Senza_sordino.svg'], ['Engage pedal', 'Pedal_Mark_1.svg'], ['Release pedal', 'Music-pedalup.svg'], ['Pedal line', 'Music-pedal.svg'],
+];
+const picFor = label => { const hit = PIC_OF.find(([k]) => label === k || label.startsWith(k + ' ')); return hit && ARTICLE_PIC.get(hit[1]); };
 SYMBOL_GROUPS.forEach(g => {
   g.items = g.items.filter(([, u]) => !REPLACED.test(u));
-  for (const [label, icon, pick] of NATIVE_LIB[g.name] || []) g.items.push([label, 'native', icon, pick]);
+  for (const [label, icon, pick] of NATIVE_LIB[g.name] || []) g.items.push([label, 'native', icon, pick, picFor(label)]);
 });
 for (let i = SYMBOL_GROUPS.length - 1; i >= 0; i--) if (!SYMBOL_GROUPS[i].items.length) SYMBOL_GROUPS.splice(i, 1);
 // Text-based notation from the same page (fingerings, hand and organ manual abbreviations)
@@ -1010,7 +1027,9 @@ function drawStave(svg, stave, si, L) {
   const one = stave.lines === 1, T = one ? yOf(2) : yOf(0), B = one ? yOf(6) : isTab(stave) ? tabY(tuningOf(stave).length) : yOf(8);
   if (isTab(stave)) for (let s = 1; s <= tuningOf(stave).length; s++) line(svg, 10, tabY(s), W - 10, tabY(s), 1.2);
   else for (let i = 0; i < 5; i++) if (!one || i === 2) line(svg, 10, yOf(i * 2), W - 10, yOf(i * 2), 1.2);
-  if (isTab(stave)) ['T', 'A', 'B'].forEach((c, i) => txt(svg, 30, tabY(1 + (tuningOf(stave).length - 1) * (i + 0.5) / 3) + 6, c, { size: 17, italic: false, font: 'Inter, sans-serif' }));
+  // TAB letters share the height of the strings, smaller on short (4-string) staves
+  const tabSize = Math.min(17, (B - T) / 3 * 0.85);
+  if (isTab(stave)) ['T', 'A', 'B'].forEach((c, i) => txt(svg, 30, T + (B - T) * (i + 0.5) / 3 + tabSize * 0.36, c, { size: tabSize, italic: false, font: 'Inter, sans-serif' }));
   line(svg, 10, T, 10, B, 1.5);
   const c = CLEFS[stave.clef];
   // a clef placed from the library takes the clef's place, so the built-in one is not drawn
@@ -1024,14 +1043,16 @@ function drawStave(svg, stave, si, L) {
     const t = el('text', { x: L.keyX + i * 10, y: yOf(steps[i]) + (ks > 0 ? 7 : 3), 'font-family': 'Noto Music', 'font-size': 32, fill: 'currentColor' }, svg);
     t.textContent = ks > 0 ? '\u266F' : '\u266D';
   }
+  // time signature fills the lines there are: a tab stave may be taller or shorter than five lines
+  const tT = isTab(stave) ? T : yOf(0), tH = isTab(stave) ? B - T : 8 * STEP, k = tH / (8 * STEP);
   if (L.showTime && stave.timeSym) {
     // common time (C) and cut time (alla breve)
-    const t = el('text', { x: L.timeX - 11, y: yOf(4) + 13, 'font-family': 'Noto Music', 'font-size': 40, fill: 'currentColor' }, svg);
+    const t = el('text', { x: L.timeX - 11 * k, y: tT + tH / 2 + 13 * k, 'font-family': 'Noto Music', 'font-size': 40 * k, fill: 'currentColor' }, svg);
     t.textContent = stave.timeSym === 'C' ? '\u{1D134}' : '\u{1D135}';
   } else if (L.showTime) {
     const [n, d] = stave.time.split('/');
-    for (const [txt, base] of [[n, 4], [d, 8]]) {
-      const t = el('text', { x: L.timeX, y: yOf(base) - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30,
+    for (const [txt, half] of [[n, 1], [d, 2]]) {
+      const t = el('text', { x: L.timeX, y: tT + tH * half / 2 - 1, 'font-family': 'Georgia, serif', 'font-weight': 700, 'font-size': 30 * k,
         'text-anchor': 'middle', fill: 'currentColor' }, svg);
       t.textContent = txt;
     }
@@ -1491,16 +1512,18 @@ function buildLibrary() {
     sec.innerHTML = `<button class="sym-title">${grp.name}<span class="count">${grp.items.length}</span></button><div class="sym-grid"></div>`;
     sec.querySelector('.sym-title').onclick = () => sec.classList.toggle('collapsed');
     const grid = sec.querySelector('.sym-grid');
-    for (const [name, u, iw, ih] of grp.items) {
+    for (const [name, u, iw, ih, pic] of grp.items) {
       const b = document.createElement('button');
       b.className = 'sym-btn';
       b.title = name;
       b.dataset.search = (name + ' ' + grp.name).toLowerCase();
       const native = u === 'native';
       const sym = grp.text ? { t: u, n: name, g: grp.name } : { u, n: name, iw, ih };
-      if (grp.text || native) b.innerHTML = '<div class="txt"></div><span class="lbl"></span>';
+      if (pic) b.innerHTML = '<img loading="lazy" alt=""><span class="lbl"></span>';
+      else if (grp.text || native) b.innerHTML = '<div class="txt"></div><span class="lbl"></span>';
       else b.innerHTML = `<img loading="lazy" alt=""><span class="lbl"></span>`;
-      if (native) { const t = b.querySelector('.txt'); t.textContent = iw; t.classList.add('glyph'); }
+      if (pic) b.querySelector('img').src = imgUrl(pic);
+      else if (native) { const t = b.querySelector('.txt'); t.textContent = iw; t.classList.add('glyph'); }
       else if (grp.text) b.querySelector('.txt').textContent = u; else b.querySelector('img').src = imgUrl(u);
       b.querySelector('.lbl').textContent = name;
       b.onclick = () => {
