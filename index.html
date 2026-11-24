@@ -1373,7 +1373,7 @@ function render() {
           sel = { si, ii: t }; selMark = null;
           return commit(() => {
             const all = pitchesOf(it), str = all.map((_, k) => (it.str || [])[k] || 0);
-            if (all.includes(n.p)) return;
+            if (str.includes(n.s)) return;  // one note per string; the same pitch on another string is fine (unisons)
             it.ch = [...(it.ch || []), n.p]; it.str = [...str, n.s];
             if (n.acc) stave.marks.push({ ...n.acc, a: it.id, pi: all.length });
           });
@@ -2333,8 +2333,8 @@ function cleanScore(data) {
         if (Number.isInteger(it.id) && it.id > 0) o.id = it.id;
         if (it.kind === 'note') {
           o.p = int(it.p, -10, 80, 34);
-          const ch = (Array.isArray(it.ch) ? it.ch : []).filter(q => Number.isInteger(q) && q >= -10 && q <= 80 && q !== o.p).slice(0, 12);
-          if (ch.length) o.ch = [...new Set(ch)];
+          const ch = (Array.isArray(it.ch) ? it.ch : []).filter(q => Number.isInteger(q) && q >= -10 && q <= 80 && (st.lines === 6 || q !== o.p)).slice(0, 12);
+          if (ch.length) o.ch = st.lines === 6 ? ch : [...new Set(ch)];  // tab keeps unisons on different strings
         }
         if (it.dot === true && it.dur !== 'measure') o.dot = true;
         if (it.dur === 'measure') o.count = int(it.count, 1, 999, 4);
