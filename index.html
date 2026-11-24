@@ -1000,11 +1000,12 @@ function writtenMidis(st) {
   const [n, d] = st.time.split('/').map(Number), cap = n / d, accs = {};
   for (const m of st.marks || []) if (m.u && fileOf(m.u) in ACCIDENTAL) (accs[m.a] = accs[m.a] || []).push({ pi: m.pi || 0, alter: ACCIDENTAL[fileOf(m.u)] });
   let carry = {}, fill = 0;
-  const tup = tupletScales(st);
+  const tup = tupletScales(st), tab = isTab(st);
   return st.items.map((it, ii) => {
     let out = [];
     if (it.kind === 'note') out = pitchesOf(it).map((p, pi) => {
       const letter = ((p % 7) + 7) % 7, acc = accs[it.id]?.find(a => a.pi === pi);
+      if (acc && tab) return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + acc.alter;  // a tab fret is exact: its accidental is its own and never carries
       if (acc) carry[p] = acc.alter;
       return 12 * (Math.floor(p / 7) + 1) + SEMIS[letter] + (p in carry ? carry[p] : keyAlter(st.key || 0, letter));
     });
@@ -1837,7 +1838,7 @@ function staveBars(st, spw, level0) {
     const ev = { ii, t: t - bars[bars.length - 1].t0, adv: dur + p.pause, sounds: [], len: dur * p.len };
     if (it.kind === 'note') {
       const ps = pitchesOf(it), vol = (level[ii] / 0.65) * 0.5 * p.vol * (p.ghost ? 0.4 : 1) * (muted[ii] ? 0.55 : 1) / Math.sqrt(ps.length);
-      const midis = ps.map((q, pi) => { const acc = accs[it.id]?.find(a => a.pi === pi); if (acc) carry[q] = acc.alter; return midiOf(q, ii); });
+      const midis = ps.map((q, pi) => { const acc = accs[it.id]?.find(a => a.pi === pi); if (acc && isTab(st)) return midiOf(q, ii, acc.alter); if (acc) carry[q] = acc.alter; return midiOf(q, ii); });
       ev.midis = midis; ev.tie = ties.has(it.id);
       const order = midis.map((m, k) => k).sort((x, y) => midis[x] - midis[y]);
       order.forEach((k, rank) => {
