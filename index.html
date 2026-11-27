@@ -83,6 +83,30 @@
     padding: 10px 16px; border-radius: 8px; display: none; gap: 12px; align-items: center; font-size: 14px; z-index: 10; }
   .toast button { background: none; border: none; color: var(--accent); font-weight: 700; cursor: pointer; font-size: 14px; }
 
+  /* Instruments: a playable piano, fretboard, fingerboard or drum kit that writes to a stave; stays at the bottom of the screen while you scroll */
+  .inst { position: sticky; bottom: 0; z-index: 4; background: var(--paper); border: 1px solid var(--border); border-radius: 12px; margin: 16px 0;
+    box-shadow: 0 -8px 24px rgba(0,0,0,.10); }
+  .inst-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .inst-bar select { font: 13px Inter, sans-serif; color: var(--ink); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 6px; }
+  .inst-bar .btn { height: 32px; padding: 0 10px; font-size: 13px; }
+  .inst-bar .seg { display: inline-flex; }
+  .inst-bar .seg .btn { border-radius: 0; } .inst-bar .seg .btn:first-child { border-radius: 8px 0 0 8px; } .inst-bar .seg .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+  .inst-bar .lens { display: inline-flex; gap: 3px; }
+  .inst-bar .lens .tool { width: 28px; height: 34px; border-radius: 6px; }
+  .inst-bar .lens .tool svg { width: 22px; height: 30px; }
+  .inst-bar .opt { display: inline-flex; align-items: center; gap: 6px; }
+  .inst-bar .opt[hidden], .inst-bar .btn[hidden] { display: none; }
+  .btn.rec.on { background: #b91c1c; border-color: #b91c1c; color: #fff; }
+  .inst-bar .close { margin-left: auto; border: none; background: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 2px 8px; border-radius: 6px; }
+  .inst-view { overflow-x: auto; padding: 8px 10px 4px; touch-action: pan-x; }
+  .inst-svg { display: block; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: pointer; }
+  .inst-svg .pk.w.on { fill: #fcd5bd; } .inst-svg .pk.b.on { fill: #c2410c; }
+  .inst-svg .pk.pend { stroke: #c2410c; stroke-width: 2.5; }
+  .inst-svg .fdot.on { fill: #c2410c; } .inst-svg .fdot.pend { fill: #c2410c; opacity: .55; stroke: #fff; stroke-width: 1.5; }
+  .inst-svg .dpad { transform-box: fill-box; transform-origin: center; transition: transform .07s, filter .07s; }
+  .inst-svg .dpad.hit { transform: scale(.95); filter: brightness(1.3); }
+  .inst-status { font-size: 12px; color: var(--muted); padding: 2px 12px 8px; min-height: 18px; line-height: 1.5; }
+  .inst-status.err { color: #b91c1c; }
   /* Symbol library sidebar (same pattern as the LaTeX editor: search + collapsible groups + grid) */
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
   .layout main { max-width: none; margin: 0; min-width: 0; }
@@ -154,6 +178,9 @@
     .stave-head { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
     .stave-head select { flex-shrink: 0; }
     .toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+    .inst { bottom: calc(66px + env(safe-area-inset-bottom)); }
+    .inst-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+    .inst-bar > * { flex-shrink: 0; }
     aside.library { bottom: calc(63px + env(safe-area-inset-bottom)); height: 58vh; }
   }
   /* Pinch-zoomed in: the tool bar (and the symbol sheet) stay on screen at normal size, pinned to the bottom of what you can see */
@@ -188,7 +215,7 @@
   /* Printing: just the music */
   @media print {
     body { background: #fff; color: #000; }
-    .toolbar, aside.library, .add-stave, .hint, .stave-head select, .stave-head .remove, .toast, .scroller::-webkit-scrollbar { display: none !important; }
+    .toolbar, aside.library, .inst, .add-stave, .hint, .stave-head select, .stave-head .remove, .toast, .scroller::-webkit-scrollbar { display: none !important; }
     .layout { display: block; }
     main { padding: 0; }
     .stave-wrap { border: none; break-inside: avoid; }
@@ -226,6 +253,7 @@
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
   <button class="btn danger" id="clear" title="Clear all staves">Clear all</button>
   <button class="btn" id="saveFile" title="Download this score as a file">⬇ Save</button>
+  <button class="btn" id="instToggle" aria-pressed="false" title="Play a piano, guitar, violin or drum kit; what you play is written on a stave">♪ Instruments</button>
   <button class="btn" id="liveToggle" aria-pressed="false" title="Write the score as Staves code; the staves update as you type">✎ Live code</button>
   <button class="btn" id="saveCode" title="Download this score as Staves code (.staves)">⬇ Code</button>
   <button class="btn" id="openFile" title="Open a score file">⬆ Open</button>
@@ -240,6 +268,27 @@
   </div>
   <div id="staves"></div>
   <button class="add-stave" id="addStave">+ Add stave</button>
+  <section class="inst" id="inst" hidden aria-label="Instruments">
+    <div class="inst-bar">
+      <select id="instPick" aria-label="Instrument"></select>
+      <label class="opt">Stave <select id="instStave" aria-label="Stave to write to"></select></label>
+      <button class="btn" id="instNew" title="Add a stave set up for this instrument (piano pair, tab, drum stave…)">+ New stave</button>
+      <span class="seg"><button class="btn" data-mode="step" title="Each press writes one note or chord of the chosen length">Step</button><button class="btn" data-mode="live" title="Play along to a metronome; the rhythm is worked out for you">Live</button></span>
+      <span class="lens" id="instLens"><button class="tool" id="instDot" title="Dotted (lengthens each note by half)" aria-pressed="false"><svg viewBox="-15 40 30 52"><circle cx="0" cy="66" r="4" fill="currentColor"/></svg></button></span>
+      <button class="btn" id="instRest" title="Add a rest of the chosen length (R)">Rest</button>
+      <button class="btn" id="instChord" aria-pressed="false" title="Build a chord one note at a time, then add it">Chord</button>
+      <button class="btn" id="instAdd" hidden title="Write the chord (Enter)">Add chord ↵</button>
+      <span class="opt" id="instLiveOpts" hidden>
+        <select id="instGrid" aria-label="Round the rhythm to"><option value="8">Round to quavers</option><option value="16" selected>Round to semiquavers</option><option value="32">Round to demisemiquavers</option></select>
+        <label class="opt"><input type="checkbox" id="instCount" checked> Count-in</label>
+        <button class="btn rec" id="instRec">● Record</button>
+      </span>
+      <span class="opt" id="instOct"><button class="btn" id="instDown" title="Show lower octaves">◀</button><span id="instOctLbl"></span><button class="btn" id="instUp" title="Show higher octaves">▶</button></span>
+      <button class="close" id="instClose" aria-label="Close instruments">×</button>
+    </div>
+    <div class="inst-view" id="instView"></div>
+    <div class="inst-status" id="instStatus"></div>
+  </section>
   <p class="hint">Pick a note or rest, then tap a stave at the pitch you want – it's added after the last symbol (or after the selected one).
     Bars fill up and split automatically from the time signature; overfull bars are tinted red. Tap a symbol to select it.
     <span class="desk"><br><kbd>1</kbd>–<kbd>9</kbd> breve…128th notes · <kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>9</kbd> rests · <kbd>.</kbd> dot · <kbd>↑</kbd><kbd>↓</kbd> change pitch ·
@@ -1434,6 +1483,7 @@ function render() {
   document.getElementById('selEdit').hidden = !((spec && spec.edit) || (selItem && selItem.dur === 'measure'));
   document.getElementById('selUp').disabled = document.getElementById('selDown').disabled = sm ? !!sm.d : (!selItem || selItem.kind === 'rest');
   document.getElementById('chordTool')?.setAttribute('aria-pressed', chordMode);
+  instSync();
 }
 
 // Where a library symbol goes, from its rule and its anchor (c: anchor x, notehead y/extent, stem direction, next note x).
@@ -1641,7 +1691,7 @@ function buildPalette() {
 function setTool(t) {
   tool = t;
   document.querySelectorAll('.tool').forEach(b => {
-    if (b.id === 'dotTool' || b.id === 'chordTool') return;
+    if (b.id === 'dotTool' || b.id === 'chordTool' || b.id === 'instDot') return;
     const on = b.id === 'eraser' ? t.kind === 'erase' : b.dataset.kind === t.kind && b.dataset.dur === t.dur;
     b.setAttribute('aria-pressed', on);
   });
@@ -2022,6 +2072,7 @@ function startPlayback() {
     if (vol < 1e-3) return;  // after niente
     const end = at + Math.max(0.05, dur - 0.02);
     if (o.perc) {
+      if (DRUM_AT[midi]) return drumHit(ctx, master, DRUM_AT[midi], at, Math.min(1.5, vol * 2));  // a drum stave's notes sound as the kit's drums
       // unpitched staves: a noise hit, higher notes brighter
       if (!noise) { noise = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate); const ch = noise.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1; }
       const src = ctx.createBufferSource(), bp = ctx.createBiquadFilter();
@@ -2419,8 +2470,694 @@ document.getElementById('tempo').onchange = e => {
   if (player) { stopPlayback(); startPlayback(); }  // hear the new speed straight away
 };
 
+// ---------- Instruments: a piano, fretboards, bowed fingerboards and a drum kit to play; what you play is written on a stave ----------
+// drums sit where drum notation puts them on a percussion stave (pitch numbers as on a treble stave)
+const DRUM_KIT = {
+  crash: { name: 'Crash', p: 40, key: 'KeyQ' }, ride: { name: 'Ride', p: 38, key: 'KeyW' },
+  hhc: { name: 'Hi-hat', p: 39, key: 'KeyA' }, hho: { name: 'Open hi-hat', p: 39, key: 'KeyS', open: true }, hhp: { name: 'Hi-hat pedal', p: 29, key: 'KeyZ' },
+  tom1: { name: 'High tom', p: 37, key: 'KeyF' }, tom2: { name: 'Mid tom', p: 36, key: 'KeyG' }, tom3: { name: 'Floor tom', p: 33, key: 'KeyH' },
+  snare: { name: 'Snare', p: 35, key: 'KeyD' }, kick: { name: 'Kick', p: 31, key: 'KeyX' },
+};
+// the drum a percussion stave's written note stands for, by its MIDI number (open hi-hat shares the closed one's place)
+const DRUM_AT = {};
+for (const [k, d] of Object.entries(DRUM_KIT)) { const m = 12 * (Math.floor(d.p / 7) + 1) + SEMIS[d.p % 7]; if (!(m in DRUM_AT)) DRUM_AT[m] = k; }
+const INSTRUMENTS = {
+  piano: { name: 'Piano', kind: 'keys' },
+  ...Object.fromEntries(['GTR', 'DROPD', 'GTR7', 'BASS4', 'BASS5', 'UKE', 'MANDO', 'BANJO'].map(k => [k, { name: TUNINGS[k].name, kind: 'frets', tun: TUNINGS[k].m }])),
+  VLN: { name: 'Violin', kind: 'bowed', tun: TUNINGS.VLN.m, clef: 'treble' }, VLA: { name: 'Viola', kind: 'bowed', tun: TUNINGS.VLA.m, clef: 'alto' },
+  VC: { name: 'Cello', kind: 'bowed', tun: TUNINGS.VC.m, clef: 'bass' },
+  drums: { name: 'Drum kit', kind: 'drums' },
+};
+// computer keys for the piano: A is C, the row above holds the black keys (one and a half octaves)
+const PIANO_KEYS = ['KeyA', 'KeyW', 'KeyS', 'KeyE', 'KeyD', 'KeyF', 'KeyT', 'KeyG', 'KeyY', 'KeyH', 'KeyU', 'KeyJ', 'KeyK', 'KeyO', 'KeyL', 'KeyP', 'Semicolon', 'Quote'];
+const keyLabel = c => c === 'Semicolon' ? ';' : c === 'Quote' ? "'" : c.slice(3);
+const inst = { id: 'piano', target: null, selSi: null, mode: 'step', chord: false, oct: 3, kb: 4, grid: 1 / 16, countIn: true,
+  held: new Map(), group: new Map(), pending: new Map(), rec: null, warned: false };
+const I = () => INSTRUMENTS[inst.id];
+
+// ----- sound: each instrument has its own voice (struck strings, plucked strings, a bow, drums) -----
+const noiseBufs = new WeakMap();
+function noiseOf(ctx) {
+  if (!noiseBufs.has(ctx)) {
+    const b = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    noiseBufs.set(ctx, b);
+  }
+  return noiseBufs.get(ctx);
+}
+function drumHit(ctx, dest, kind, at, vol = 1) {
+  const tone = (f0, f1, dur, type, lvl) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, at); o.frequency.exponentialRampToValueAtTime(f1, at + dur * 0.6);
+    g.gain.setValueAtTime(lvl * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g); g.connect(dest); o.start(at); o.stop(at + dur + 0.02);
+  };
+  const hiss = (type, freq, q, dur, lvl) => {
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = noiseOf(ctx); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(lvl * vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    s.connect(f); f.connect(g); g.connect(dest); s.start(at); s.stop(at + dur + 0.02);
+  };
+  switch (kind) {
+    case 'kick': tone(150, 42, 0.45, 'sine', 1.8); hiss('lowpass', 1500, 0.7, 0.025, 0.5); break;
+    case 'snare': tone(210, 160, 0.12, 'triangle', 0.7); hiss('highpass', 1300, 0.7, 0.22, 1); break;
+    case 'hhc': hiss('highpass', 7500, 0.8, 0.06, 0.6); break;
+    case 'hho': hiss('highpass', 7000, 0.8, 0.5, 0.5); break;
+    case 'hhp': hiss('highpass', 6500, 0.8, 0.045, 0.35); break;
+    case 'crash': hiss('highpass', 4000, 0.5, 1.8, 0.6); hiss('bandpass', 6500, 1, 0.9, 0.35); break;
+    case 'ride': hiss('highpass', 8000, 0.7, 1, 0.3); tone(830, 820, 1, 'square', 0.035); tone(1250, 1240, 0.8, 'square', 0.025); break;
+    case 'tom1': tone(250, 170, 0.4, 'sine', 1.2); hiss('lowpass', 3000, 0.7, 0.05, 0.3); break;
+    case 'tom2': tone(190, 130, 0.45, 'sine', 1.2); hiss('lowpass', 2600, 0.7, 0.05, 0.3); break;
+    case 'tom3': tone(130, 85, 0.6, 'sine', 1.3); hiss('lowpass', 2200, 0.7, 0.06, 0.3); break;
+  }
+}
+// plucked strings: Karplus-Strong (a burst of noise fed round a delay as long as the string's period)
+const pluckBufs = new Map();
+function pluckBuf(ctx, midi) {
+  const k = ctx.sampleRate + ':' + midi;
+  if (pluckBufs.has(k)) return pluckBufs.get(k);
+  const sr = ctx.sampleRate, f = 440 * 2 ** ((midi - 69) / 12), N = Math.max(2, Math.floor(sr / f - 0.5));
+  const len = Math.floor(sr * Math.min(4.5, Math.max(1.2, 3 - (midi - 52) / 20))), b = ctx.createBuffer(1, len, sr), d = b.getChannelData(0);
+  const ring = new Float32Array(N);
+  for (let i = 0; i < N; i++) ring[i] = Math.random() * 2 - 1;
+  for (let i = 0, j = 0; i < len; i++) { const a = ring[j], nx = ring[(j + 1) % N]; d[i] = a; ring[j] = (a + nx) * 0.4985; j = (j + 1) % N; }
+  const out = { b, rate: (N + 0.5) / (sr / f) };
+  pluckBufs.set(k, out);
+  return out;
+}
+const SND = (() => {
+  let ctx = null, out = null;
+  const strings = new Map();  // what each fretted string is playing, so a new note on it stops the old one
+  const init = () => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!ctx) { ctx = new AC(); const comp = ctx.createDynamicsCompressor(); out = ctx.createGain(); out.gain.value = 0.45; out.connect(comp); comp.connect(ctx.destination); }
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  };
+  const env = (g, at, peak, attack) => { g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(peak, at + attack); };
+  function piano(midi, at) {
+    const f = 440 * 2 ** ((midi - 69) / 12), g = ctx.createGain(), lp = ctx.createBiquadFilter(), vol = 0.5 * loudness(f);
+    lp.type = 'lowpass'; lp.frequency.setValueAtTime(Math.min(12000, f * 9), at); lp.frequency.exponentialRampToValueAtTime(Math.min(8000, f * 2.5), at + 1.2);
+    const oscs = [[1, 'triangle', 1], [2, 'sine', 0.35], [3, 'sine', 0.12], [4.01, 'sine', 0.05]].map(([k, type, lvl]) => {
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.type = type; o.frequency.value = f * k; og.gain.value = lvl; o.connect(og); og.connect(lp); o.start(at); return o;
+    });
+    lp.connect(g); g.connect(out);
+    const decay = Math.min(5, Math.max(0.9, 4.5 - (midi - 36) / 14));
+    env(g, at, vol, 0.004); g.gain.exponentialRampToValueAtTime(vol * 0.35, at + 0.25); g.gain.exponentialRampToValueAtTime(0.0001, at + decay);
+    oscs.forEach(o => o.stop(at + decay + 0.05));
+    return { g, oscs };
+  }
+  function bowed(midi, at) {
+    const f = 440 * 2 ** ((midi - 69) / 12), g = ctx.createGain(), lp = ctx.createBiquadFilter(), body = ctx.createBiquadFilter(), vol = 0.22 * loudness(f);
+    lp.type = 'lowpass'; lp.frequency.value = Math.min(6000, f * 6); lp.Q.value = 0.8;
+    body.type = 'peaking'; body.frequency.value = 2800; body.gain.value = 5; body.Q.value = 1.2;
+    const lfo = ctx.createOscillator(), depth = ctx.createGain();
+    lfo.frequency.value = 5.6; depth.gain.setValueAtTime(0, at); depth.gain.linearRampToValueAtTime(f * 0.005, at + 0.6);
+    lfo.connect(depth); lfo.start(at);
+    const oscs = [0, 4].map(cents => { const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = cents; depth.connect(o.frequency); o.connect(lp); o.start(at); return o; });
+    lp.connect(body); body.connect(g); g.connect(out);
+    env(g, at, vol, 0.12);
+    return { g, oscs: [...oscs, lfo], sustain: true };
+  }
+  function pluck(note, at) {
+    const { b, rate } = pluckBuf(ctx, note.midi), src = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = b; src.playbackRate.value = rate;
+    lp.type = 'lowpass'; lp.frequency.value = Math.min(9000, 440 * 2 ** ((note.midi - 69) / 12) * 14);
+    g.gain.value = 0.9 * loudness(440 * 2 ** ((note.midi - 69) / 12));
+    src.connect(lp); lp.connect(g); g.connect(out); src.start(at);
+    const h = { g, oscs: [src], ring: true };
+    if (note.str) { const old = strings.get(note.str); if (old) stop(old, true); strings.set(note.str, h); }
+    return h;
+  }
+  function stop(h, force) {
+    if (!h || (h.ring && !force)) return;  // a plucked string rings on after the finger lifts
+    const t = ctx.currentTime;
+    h.g.gain.cancelScheduledValues(t); h.g.gain.setValueAtTime(Math.max(0.0001, h.g.gain.value), t); h.g.gain.exponentialRampToValueAtTime(0.0001, t + (h.sustain ? 0.25 : 0.12));
+    h.oscs.forEach(o => { try { o.stop(t + 0.3); } catch {} });
+  }
+  function play(note, kind) {
+    if (!init()) return null;
+    const at = ctx.currentTime + 0.005;
+    if (note.drum) { drumHit(ctx, out, note.drum, at, 1); return null; }
+    return kind === 'keys' ? piano(note.midi, at) : kind === 'bowed' ? bowed(note.midi, at) : pluck(note, at);
+  }
+  function click(at, accent) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'square'; o.frequency.value = accent ? 1800 : 1200;
+    g.gain.setValueAtTime(accent ? 0.35 : 0.2, at); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.04);
+    o.connect(g); g.connect(out); o.start(at); o.stop(at + 0.05);
+  }
+  // what you press answers what you heard, which left the speakers a little after its scheduled time
+  const heard = () => ctx ? ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0) : 0;
+  return { init, play, stop, click, heard, now: () => ctx ? ctx.currentTime : 0 };
+})();
+
+// ----- which stave gets the notes -----
+const clefVarOf = st => (st.marks || []).find(m => m.d === 'clef')?.var;
+const isPercStave = st => PERC_CLEFS.has(clefVarOf(st));
+function instTarget() {
+  if (sel && sel.si !== inst.selSi) inst.target = sel.si;  // tapping a stave makes it the one you write to
+  inst.selSi = sel ? sel.si : null;
+  const n = state.staves.length;
+  if (inst.target == null || inst.target >= n) inst.target = n - 1;
+  return inst.target;
+}
+const pianoPair = t => inst.id === 'piano' && state.staves[t]?.join === 'brace' && state.staves[t + 1] && !isTab(state.staves[t]) && !isTab(state.staves[t + 1]);
+const staveLabel = (st, i) => `${i + 1}: ${isPercStave(st) ? 'Drums' : isTab(st) ? (TUNINGS[tuningId(tuningOf(st))]?.name || 'Custom') + ' tab' : CLEFS[st.clef].name + ' clef'}`;
+// why this instrument cannot write on that stave, if it cannot
+function unsuitable(t) {
+  const st = state.staves[t], drums = I().kind === 'drums';
+  if (drums && !isPercStave(st)) return `Stave ${t + 1} isn't a drum stave. Press "+ New stave" to add one.`;
+  if (!drums && isPercStave(st)) return `Stave ${t + 1} is a drum stave. Pick another stave or press "+ New stave".`;
+  return '';
+}
+// the staves an event goes to: a piano pair splits at middle C, the other stave gets a rest
+function instParts(t, notes) {
+  if (!pianoPair(t)) return [{ si: t, notes }];
+  const hi = notes.filter(n => n.midi >= 60), lo = notes.filter(n => n.midi < 60);
+  return [{ si: t, notes: hi }, { si: t + 1, notes: lo }];
+}
+const insertAt = si => sel && sel.si === si ? sel.ii + 1 : state.staves[si].items.length;
+
+// ----- turning played notes into items, with whatever accidentals keep every note (old and new) sounding right -----
+function spellPitch(w, key, taken) {
+  const p = spellMidi(w, key).p;
+  if (!taken.includes(p)) return p;
+  // two notes on one letter (C and C sharp): spell the second the other way (D flat)
+  const letter = ((p % 7) + 7) % 7, alter = w - (12 * (Math.floor(p / 7) + 1) + SEMIS[letter]);
+  const q = alter > 0 || (alter === 0 && (letter === 2 || letter === 6)) ? p + 1 : p - 1, l2 = ((q % 7) + 7) % 7;
+  return Math.abs(w - (12 * (Math.floor(q / 7) + 1) + SEMIS[l2])) <= 1 && !taken.includes(q) ? q : null;
+}
+function makeItem(st, notes, dur, dot) {
+  const item = { kind: notes.length ? 'note' : 'rest', dur, id: newId() }, extra = [];
+  if (dot) item.dot = true;
+  if (!notes.length) return { item, want: null, extra };
+  if (isPercStave(st)) {
+    const ps = [...new Set(notes.map(n => DRUM_KIT[n.drum].p))];
+    item.p = ps[0]; if (ps.length > 1) item.ch = ps.slice(1);
+    if (notes.some(n => DRUM_KIT[n.drum].open)) extra.push({ t: 'o', n: 'o', a: item.id });
+    return { item, want: null, extra };
+  }
+  const tab = isTab(st), shift = CLEF_SHIFT[clefVarOf(st)] || 0, ps = [], want = [], strs = [];
+  for (const n of [...notes].sort((a, b) => a.midi - b.midi)) {
+    const w = n.midi - shift, p = tab ? spellMidi(w, st.key || 0).p : spellPitch(w, st.key || 0, ps);
+    if (p == null) continue;
+    ps.push(p); want.push(w); strs.push(n.str || 0);
+  }
+  item.p = ps[0]; if (ps.length > 1) item.ch = ps.slice(1);
+  if (tab) item.str = strs;
+  return { item, want, extra };
+}
+function setAccidental(st, it, pi, midi) {
+  const p = pitchesOf(it)[pi], letter = ((p % 7) + 7) % 7, alter = midi - (12 * (Math.floor(p / 7) + 1) + SEMIS[letter]);
+  st.marks = st.marks.filter(m => !(m.a === it.id && (m.pi || 0) === pi && m.u && fileOf(m.u) in ACCIDENTAL));
+  if (Math.abs(alter) <= 1) st.marks.push({ ...accidentalSym(alter), a: it.id, pi });
+}
+function placeItems(st, at, made) {
+  const before = writtenMidis(st), goal = new Map(st.items.map((it, i) => [it.id, before[i]]));
+  st.items.splice(at, 0, ...made.map(x => x.item));
+  for (const x of made) { if (x.want) goal.set(x.item.id, x.want); st.marks.push(...x.extra); }
+  if (isPercStave(st)) return;
+  for (let pass = 0; pass < 4; pass++) {
+    const now = writtenMidis(st);
+    let changed = false;
+    st.items.forEach((it, i) => (goal.get(it.id) || []).forEach((m, pi) => { if (now[i][pi] !== m) { setAccidental(st, it, pi, m); changed = true; } }));
+    if (!changed) break;
+  }
+}
+function revealEnd(si, at) {
+  const L = layout(state.staves[si], 0);
+  reveal = { si, x: (at < L.items.length ? L.items[at].x : L.tailX) + 140 };
+}
+// the panel stays at the bottom of the screen; keep the stave being written above it
+function showStave(si) {
+  const svg = document.querySelectorAll('#staves svg.stave')[si];
+  if (!svg || instBox.hidden) return;
+  const under = svg.getBoundingClientRect().bottom - instBox.getBoundingClientRect().top + 12;
+  if (under > 0) window.scrollBy({ top: under, behavior: 'smooth' });
+}
+function warnRange(st, made) {
+  if (inst.warned || isTab(st) || isPercStave(st)) return;
+  const far = made.some(x => x.item.kind === 'note' && pitchesOf(x.item).some(p => { const s = pitchToStep(st.clef, p); return s < MIN_STEP || s > MAX_STEP; }));
+  if (far) { inst.warned = true; toast(`Some notes are far off this ${CLEFS[st.clef].name.toLowerCase()} stave. "+ New stave" in the instrument panel adds one that fits this instrument.`); }
+}
+const curDur = () => (tool.kind === 'note' || tool.kind === 'rest') && tool.dur !== 'measure' ? tool.dur : 'quarter';
+// step mode: one press (or chord) is one note of the chosen length
+function instWrite(notes) {
+  const t = instTarget(), why = notes.length ? unsuitable(t) : '';
+  if (why) return instSay(why, true);
+  const parts = instParts(t, notes);
+  revealEnd(parts[0].si, insertAt(parts[0].si));
+  commit(() => {
+    for (const { si, notes: ns } of parts) {
+      const st = state.staves[si], at = insertAt(si), made = [makeItem(st, ns, curDur(), dotted)];
+      placeItems(st, at, made);
+      warnRange(st, made);
+      if (sel && sel.si === si) sel = { si, ii: at };
+    }
+  });
+  showStave(parts[parts.length - 1].si);
+}
+
+// ----- live mode: play along to a metronome; the rhythm is rounded to the grid and written with bars and ties -----
+const VALUES = DURS.flatMap(d => [[d.val * 1.5, d.id, true], [d.val, d.id, false]]).filter(v => v[0] <= 2 + 1e-9).sort((a, b) => b[0] - a[0]);
+function barPos(st, at) {
+  const [n, d] = st.time.split('/').map(Number), cap = n / d, tup = tupletScales(st);
+  let fill = 0;
+  for (let i = 0; i < at; i++) { const it = st.items[i]; fill += it.dur === 'measure' ? cap : itemVal(it) * tup[i]; if (fill >= cap - 1e-9) fill = 0; }
+  return { pos: fill, cap };
+}
+// a length (in whole notes) starting at pos in the bar, cut at barlines into written values
+function splitLen(len, pos, cap) {
+  const out = [];
+  for (let guard = 0; len > 1e-6 && guard < 400; guard++) {
+    const room = cap - pos, take = Math.min(len, room > 1e-6 ? room : cap), v = VALUES.find(v => v[0] <= take + 1e-6);
+    if (!v) break;
+    out.push({ dur: v[1], dot: v[2] });
+    len -= v[0]; pos += v[0];
+    if (pos >= cap - 1e-6) pos = 0;
+  }
+  return out;
+}
+// recorded presses -> [{ len, notes }] covering the take from its first downbeat, chords where onsets round together
+function liveSeq(evts, g) {
+  const q = t => Math.max(0, Math.round(t / g) * g), groups = new Map();
+  for (const e of evts) {
+    const s = q(e.on), gr = groups.get(s) || { s, end: 0, notes: new Map() };
+    gr.notes.set(noteKey(e.note), e.note); gr.end = Math.max(gr.end, q(e.off));
+    groups.set(s, gr);
+  }
+  const gs = [...groups.values()].sort((a, b) => a.s - b.s), seq = [];
+  let cur = 0;
+  gs.forEach((gr, i) => {
+    if (gr.s > cur + 1e-9) seq.push({ len: gr.s - cur, notes: [] });
+    const next = gs[i + 1] ? gs[i + 1].s : Infinity, e = Math.min(Math.max(gr.end, gr.s + g), next);
+    seq.push({ len: e - gr.s, notes: [...gr.notes.values()] });
+    cur = e;
+  });
+  return { seq, total: cur };
+}
+function writeTake(st, at, seq, fromBar) {
+  let { pos, cap } = barPos(st, at);
+  const made = [], drums = isPercStave(st), push = (notes, len, tie) => {
+    splitLen(len, pos, cap).forEach((piece, k, all) => {
+      const x = makeItem(st, drums && k ? [] : notes, piece.dur, piece.dot);  // a drum hit is not held over: the rest of it is silence
+      if (tie && !drums && notes.length && k < all.length - 1) x.extra.push({ d: 'tie', a: x.item.id });
+      made.push(x);
+      pos += itemVal(x.item); if (pos >= cap - 1e-6) pos = 0;
+    });
+  };
+  if (fromBar && pos > 1e-6) push([], cap - pos, false);  // the take starts on a downbeat, so finish the bar that is part-filled
+  for (const ev of seq) push(ev.notes, ev.len, true);
+  if (pos > 1e-6) push([], cap - pos, false);  // and ends on a barline
+  placeItems(st, at, made);
+  warnRange(st, made);
+  return made.length;
+}
+function recStart() {
+  const t = instTarget(), why = unsuitable(t);
+  if (why) return instSay(why, true);
+  if (!SND.init()) return toast('This browser cannot play audio.');
+  stopPlayback();
+  const st = state.staves[t], [n, d] = st.time.split('/').map(Number), { beat, bpm } = tempo(), spw = 60 / bpm / beat, click = spw / d;
+  const t0 = SND.now() + 0.15 + (inst.countIn ? n * click : 0);
+  inst.rec = { t0, spw, click, n, evts: [], open: new Map(), next: inst.countIn ? -n : 0 };
+  const tick = () => {
+    const r = inst.rec;
+    if (!r) return;
+    while (r.t0 + r.next * r.click < SND.now() + 0.12) { SND.click(r.t0 + r.next * r.click, ((r.next % r.n) + r.n) % r.n === 0); r.next++; }
+    const k = Math.floor((SND.now() - r.t0) / r.click);
+    instSay(k < 0 ? `Count-in: ${-k}…` : `Recording: bar ${Math.floor(k / r.n) + 1}, beat ${(k % r.n) + 1}. Press Stop when you're done.`);
+    r.timer = setTimeout(tick, 25);
+  };
+  tick();
+  instBar();
+}
+function recStop() {
+  const r = inst.rec;
+  if (!r) return;
+  clearTimeout(r.timer);
+  inst.rec = null;
+  const now = SND.heard() - r.t0;
+  for (const e of r.open.values()) { e.off = now; r.evts.push(e); }
+  instBar();
+  const evts = r.evts.filter(e => e.off > -r.click / 2).map(e => ({ note: e.note, on: e.on / r.spw, off: e.off / r.spw }));
+  if (!evts.length) return instSay('Nothing was played, so nothing was written.');
+  const t = instTarget(), parts = pianoPair(t) ? [[t, evts.filter(e => e.note.midi >= 60)], [t + 1, evts.filter(e => e.note.midi < 60)]] : [[t, evts]];
+  const seqs = parts.map(([si, es]) => [si, liveSeq(es, inst.grid)]), total = Math.max(...seqs.map(([, s]) => s.total));
+  revealEnd(t, insertAt(t));
+  let count = 0;
+  commit(() => {
+    for (const [si, { seq, total: own }] of seqs) {
+      if (own < total) seq.push({ len: total - own, notes: [] });
+      const at = insertAt(si), fromEnd = at === state.staves[si].items.length;
+      count += writeTake(state.staves[si], at, seq, fromEnd);
+      if (sel && sel.si === si) sel = null;
+    }
+  });
+  showStave(seqs[seqs.length - 1][0]);
+  instSay(`Wrote ${count} notes and rests. Undo (⌘/Ctrl Z) takes the whole take back.`);
+}
+
+// ----- pressing and releasing (mouse, touch, computer keys) -----
+const noteKey = n => n.drum ? 'd' + n.drum : 'm' + n.midi + (n.str ? ':' + n.str : '');
+function instPress(key, note) {
+  if (inst.held.has(key)) return;
+  inst.held.set(key, { note, h: SND.play(note, I().kind) });
+  if (inst.rec) inst.rec.open.set(key, { note, on: SND.heard() - inst.rec.t0 });
+  else if (inst.mode === 'step') {
+    if (inst.chord) {
+      const k = noteKey(note), had = inst.pending.has(k);
+      if (note.str) for (const [pk, pn] of inst.pending) if (pn.str === note.str) inst.pending.delete(pk);  // one note per string
+      if (had) inst.pending.delete(k); else inst.pending.set(k, note);
+      instBar();
+    } else inst.group.set(noteKey(note), note);
+  }
+  if (note.drum) flashPad(note.drum);
+  instMarks();
+}
+function instRelease(key) {
+  const e = inst.held.get(key);
+  if (!e) return;
+  inst.held.delete(key);
+  SND.stop(e.h);
+  if (inst.rec) { const o = inst.rec.open.get(key); if (o) { inst.rec.open.delete(key); o.off = SND.heard() - inst.rec.t0; inst.rec.evts.push(o); } }
+  // every key that went down together lands as one chord, once the last one comes up
+  if (!inst.held.size && inst.group.size) { const g = [...inst.group.values()]; inst.group.clear(); if (inst.mode === 'step' && !inst.rec) instWrite(g); }
+  instMarks();
+}
+function addPending() {
+  if (!inst.pending.size) return;
+  const g = [...inst.pending.values()];
+  inst.pending.clear();
+  instWrite(g);
+  instBar(); instMarks();
+}
+const pointerKeys = new Map();
+const pointerUp = e => { const k = pointerKeys.get(e.pointerId); if (k) { pointerKeys.delete(e.pointerId); instRelease(k); } };
+window.addEventListener('pointerup', pointerUp);
+window.addEventListener('pointercancel', pointerUp);
+function bindPress(elm, hit) {
+  elm.addEventListener('pointerdown', e => {
+    const r = hit(e);
+    if (!r) return;
+    e.preventDefault();
+    const key = 'p' + e.pointerId + ':' + noteKey(r);
+    pointerKeys.set(e.pointerId, key);
+    instPress(key, r);
+  });
+}
+
+// ----- drawing the instruments -----
+function gradient(defs, id, stops, x2 = 0, y2 = 1, radial) {
+  const g = el(radial ? 'radialGradient' : 'linearGradient', radial ? { id } : { id, x1: 0, y1: 0, x2, y2 }, defs);
+  stops.forEach(([o, c]) => el('stop', { offset: o, 'stop-color': c }, g));
+}
+function drawPiano(host) {
+  const w = Math.max(320, host.clientWidth - 20), octs = w >= 1100 ? 5 : w >= 820 ? 4 : w >= 560 ? 3 : 2, lo = 12 * (inst.oct + 1), hi = lo + 12 * octs;
+  const whites = [];
+  for (let m = lo; m <= hi; m++) if (![1, 3, 6, 8, 10].includes(m % 12)) whites.push(m);
+  const H = 176, top = 30, ww = w / whites.length, kh = H - top - 4;
+  const svg = el('svg', { viewBox: `0 0 ${w} ${H}`, width: w, height: H, class: 'inst-svg' });
+  const defs = el('defs', {}, svg);
+  gradient(defs, 'pkW', [[0, '#e9e6de'], [0.08, '#fbfaf6'], [0.9, '#f4f1ea'], [1, '#d9d4c8']]);
+  gradient(defs, 'pkB', [[0, '#1b1b1b'], [0.85, '#3a3836'], [0.88, '#575451'], [1, '#141414']]);
+  gradient(defs, 'pkWood', [[0, '#3b2414'], [0.6, '#24150b'], [1, '#160c05']]);
+  el('rect', { x: 0, y: 0, width: w, height: top - 6, fill: 'url(#pkWood)', rx: 6 }, svg);
+  el('rect', { x: 0, y: top - 6, width: w, height: 6, fill: '#7d1b1b' }, svg);
+  txt(svg, 10, 17, `${I().name} · C${inst.oct}–C${inst.oct + octs}`, { size: 11, italic: false, anchor: 'start', font: 'Inter, sans-serif' }).setAttribute('fill', '#d8c7a8');
+  const kbLo = 12 * (inst.kb + 1), keyOf = m => m - kbLo >= 0 && m - kbLo < PIANO_KEYS.length ? keyLabel(PIANO_KEYS[m - kbLo]) : '';
+  whites.forEach((m, i) => {
+    const r = el('rect', { x: i * ww + 0.5, y: top, width: ww - 1, height: kh, rx: 3, fill: 'url(#pkW)', stroke: '#8f897d', 'stroke-width': 0.8, class: 'pk w', 'data-m': m }, svg);
+    r.style.setProperty('--x', 0);
+    if (m % 12 === 0) txt(svg, i * ww + ww / 2, H - 12, 'C' + (m / 12 - 1), { size: Math.min(11, ww * 0.42), italic: false, font: 'Inter, sans-serif' }).setAttribute('fill', '#8a8478');
+    const k = keyOf(m);
+    if (k) txt(svg, i * ww + ww / 2, H - 28, k, { size: Math.min(11, ww * 0.42), italic: false, font: 'ui-monospace, monospace' }).setAttribute('fill', '#c2410c');
+  });
+  whites.forEach((m, i) => {
+    if (i === whites.length - 1 || ![0, 2, 5, 7, 9].includes(m % 12)) return;
+    const bw = ww * 0.58, x = (i + 1) * ww - bw / 2;
+    el('rect', { x, y: top - 1, width: bw, height: kh * 0.62, rx: 2.5, fill: 'url(#pkB)', stroke: '#000', 'stroke-width': 0.6, class: 'pk b', 'data-m': m + 1 }, svg);
+    const k = keyOf(m + 1);
+    if (k) txt(svg, x + bw / 2, top + kh * 0.62 - 9, k, { size: Math.min(10, bw * 0.5), italic: false, font: 'ui-monospace, monospace' }).setAttribute('fill', '#fdba74');
+  });
+  svg.querySelectorAll('text').forEach(t => t.setAttribute('pointer-events', 'none'));
+  bindPress(svg, e => { const k = e.target.closest('.pk'); return k && { midi: +k.dataset.m }; });
+  host.appendChild(svg);
+}
+function drawNeck(host) {
+  const ins = I(), tun = ins.tun, nS = tun.length, bowed = ins.kind === 'bowed', F = bowed ? 19 : 15;
+  const w = Math.max(660, host.clientWidth - 20), rowH = bowed ? 30 : nS > 5 ? 24 : 28, padT = 16, H = padT + nS * rowH + 26, nutX = 58;
+  const L = (w - nutX - 12) / (1 - 2 ** (-(F + 0.6) / 12)), fx = n => nutX + L * (1 - 2 ** (-n / 12)), sy = s => padT + (s - 0.5) * rowH;
+  const svg = el('svg', { viewBox: `0 0 ${w} ${H}`, width: w, height: H, class: 'inst-svg' }), defs = el('defs', {}, svg);
+  gradient(defs, 'nkWood', bowed ? [[0, '#26221e'], [0.5, '#0f0d0b'], [1, '#1d1916']] : [[0, '#5a3520'], [0.5, '#3d2213'], [1, '#2c180c']]);
+  gradient(defs, 'nkHead', [[0, '#7a4a28'], [1, '#4a2a14']]);
+  gradient(defs, 'nkFret', [[0, '#f5f6f7'], [0.5, '#a7acb1'], [1, '#e3e5e7']], 1, 0);
+  gradient(defs, 'nkInlay', [[0, '#fffdf6'], [0.6, '#e9e1cf'], [1, '#cfc5b0']], 0, 0, true);
+  const by0 = padT - 6, by1 = padT + nS * rowH + 6;
+  el('rect', { x: 0, y: by0 - 4, width: nutX - 6, height: by1 - by0 + 8, rx: 6, fill: 'url(#nkHead)' }, svg);
+  el('rect', { x: nutX, y: by0, width: w - nutX - 4, height: by1 - by0, fill: 'url(#nkWood)' }, svg);
+  // wood grain
+  let seed = 7;
+  const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+  for (let i = 0; i < 26; i++) { const y = by0 + rnd() * (by1 - by0); el('path', { d: `M${nutX} ${y} Q${nutX + w * 0.4} ${y + (rnd() - 0.5) * 6} ${w - 4} ${y + (rnd() - 0.5) * 4}`, stroke: bowed ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.18)', 'stroke-width': 0.6 + rnd(), fill: 'none' }, svg); }
+  if (!bowed) {
+    for (const n of [3, 5, 7, 9, 15, 17, 19, 21]) if (n <= F) el('circle', { cx: (fx(n - 1) + fx(n)) / 2, cy: (by0 + by1) / 2, r: 5.5, fill: 'url(#nkInlay)' }, svg);
+    if (F >= 12) for (const f of [0.3, 0.7]) el('circle', { cx: (fx(11) + fx(12)) / 2, cy: by0 + (by1 - by0) * f, r: 5.5, fill: 'url(#nkInlay)' }, svg);
+    for (let n = 1; n <= F; n++) el('rect', { x: fx(n) - 1.6, y: by0, width: 3.2, height: by1 - by0, fill: 'url(#nkFret)' }, svg);
+  } else for (const n of [2, 4, 5, 7]) el('rect', { x: fx(n) - 1, y: by0, width: 2, height: by1 - by0, fill: 'rgba(255,255,255,.22)' }, svg);  // first-position finger tapes
+  el('rect', { x: nutX - 6, y: by0 - 2, width: 6, height: by1 - by0 + 4, fill: '#eee6d2', stroke: '#bfb59f', 'stroke-width': 0.6 }, svg);
+  const lowM = Math.min(...tun), highM = Math.max(...tun);
+  tun.forEach((m, i) => {
+    const s = i + 1, y = sy(s), t = 0.7 + (highM - m) / Math.max(1, highM - lowM) * (bowed ? 1.4 : nS > 4 ? 2 : 1.2) + (m < 45 ? 0.8 : 0);
+    const wound = m < (bowed ? 62 : 57);
+    el('line', { x1: 10, y1: y + 1.4, x2: w - 4, y2: y + 1.4, stroke: 'rgba(0,0,0,.45)', 'stroke-width': t }, svg);
+    el('line', { x1: 10, y1: y, x2: w - 4, y2: y, stroke: wound ? '#c9a15e' : '#e4e7ea', 'stroke-width': t }, svg);
+    if (wound) el('line', { x1: 10, y1: y, x2: w - 4, y2: y, stroke: 'rgba(0,0,0,.28)', 'stroke-width': t, 'stroke-dasharray': '1 1.4' }, svg);
+    el('circle', { cx: 18, cy: y, r: 4.5, fill: '#d9dde1', stroke: '#8d949b' }, svg);  // tuning peg
+    txt(svg, 36, y + 4, midiName(m).replace(/-?\d+$/, ''), { size: 11, italic: false, font: 'Inter, sans-serif' }).setAttribute('fill', '#f1e6d3');
+  });
+  for (let n = 1; n <= F; n++) if (bowed ? [2, 4, 5, 7, 12].includes(n) : [1, 3, 5, 7, 9, 12, 15].includes(n))
+    txt(svg, bowed ? fx(n) : (fx(n - 1) + fx(n)) / 2, H - 6, String(n), { size: 10, italic: false, font: 'Inter, sans-serif' }).setAttribute('fill', '#8a8478');
+  svg.querySelectorAll('text').forEach(t => t.setAttribute('pointer-events', 'none'));
+  el('g', { class: 'inst-marks', 'pointer-events': 'none' }, svg);
+  inst.geo = { fx, sy, nutX, bowed, F };
+  bindPress(svg, e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * (w / r.width), y = (e.clientY - r.top) * (H / r.height);
+    const s = Math.round((y - padT) / rowH + 0.5);
+    if (s < 1 || s > nS) return null;
+    let n = 0;
+    if (x >= nutX) {
+      if (bowed) n = Math.round(-12 * Math.log2(Math.max(1e-6, 1 - (x - nutX) / L)));
+      else { n = 1; while (n < F && x > fx(n)) n++; }
+    }
+    n = Math.max(0, Math.min(F, n));
+    return { midi: tun[s - 1] + n, str: s, fret: n };
+  });
+  host.appendChild(svg);
+}
+const DRUM_SHAPES = [  // [kind, cx, cy, rx, ry, shell] in fractions of the kit's width (x) and pixels (y)
+  ['kick', 0.47, 204, 0.1, 54, 'kick'], ['tom1', 0.38, 66, 0.062, 30, 'drum'], ['tom2', 0.56, 66, 0.066, 32, 'drum'],
+  ['tom3', 0.72, 178, 0.08, 40, 'drum'], ['snare', 0.25, 182, 0.074, 36, 'snare'],
+  ['hho', 0.085, 92, 0.072, 15, 'hat'], ['hhc', 0.085, 158, 0.072, 15, 'hat'], ['hhp', 0.085, 232, 0.045, 14, 'pedal'],
+  ['crash', 0.235, 40, 0.085, 20, 'cym'], ['ride', 0.86, 70, 0.11, 25, 'cym'],
+];
+function drawKit(host) {
+  const w = Math.max(560, host.clientWidth - 20), H = 270;
+  const svg = el('svg', { viewBox: `0 0 ${w} ${H}`, width: w, height: H, class: 'inst-svg' }), defs = el('defs', {}, svg);
+  gradient(defs, 'dkHead', [[0, '#fbf9f3'], [0.7, '#ece7da'], [1, '#c9c2b2']], 0, 0, true);
+  gradient(defs, 'dkCym', [[0, '#f3d98a'], [0.35, '#d4a845'], [0.75, '#b8862c'], [1, '#8a6118']], 0, 0, true);
+  gradient(defs, 'dkShell', [[0, '#7f1d1d'], [0.5, '#b91c1c'], [1, '#5f1212']], 1, 0);
+  gradient(defs, 'dkKick', [[0, '#2a2a2a'], [0.8, '#111'], [1, '#000']], 0, 0, true);
+  el('rect', { x: 0, y: 0, width: w, height: H, rx: 10, fill: '#2a2622' }, svg);
+  for (const [kind, fx, cy, frx, ry, shell] of DRUM_SHAPES) {
+    const cx = fx * w, rx = frx * w, g = el('g', { class: 'dpad', 'data-d': kind }, svg), d = DRUM_KIT[kind];
+    if (shell === 'kick') {
+      el('circle', { cx, cy, r: ry + 6, fill: 'url(#dkShell)' }, g);
+      el('circle', { cx, cy, r: ry, fill: 'url(#dkKick)', stroke: '#c0c5ca', 'stroke-width': 3 }, g);
+      el('circle', { cx, cy, r: ry * 0.45, fill: 'none', stroke: '#c2410c', 'stroke-width': 3 }, g);
+    } else if (shell === 'drum' || shell === 'snare') {
+      el('rect', { x: cx - rx, y: cy, width: rx * 2, height: ry * 0.9, fill: shell === 'snare' ? '#c5c9ce' : 'url(#dkShell)' }, g);
+      el('ellipse', { cx, cy: cy + ry * 0.9, rx, ry: ry * 0.42, fill: shell === 'snare' ? '#9ca3a9' : '#5f1212' }, g);
+      el('ellipse', { cx, cy, rx, ry: ry * 0.42, fill: 'url(#dkHead)', stroke: '#c0c5ca', 'stroke-width': 3 }, g);
+    } else if (shell === 'pedal') {
+      el('rect', { x: cx - rx * 0.5, y: cy - ry, width: rx, height: ry * 2, rx: 4, fill: '#9ca3a9', stroke: '#6b7280' }, g);
+      for (let k = -2; k <= 2; k++) el('line', { x1: cx - rx * 0.35, y1: cy + k * 4, x2: cx + rx * 0.35, y2: cy + k * 4, stroke: '#6b7280' }, g);
+    } else {
+      const pair = shell === 'hat', open = kind === 'hho';
+      if (pair) el('ellipse', { cx, cy: cy + (open ? 9 : 4), rx, ry: ry * 0.55, fill: 'url(#dkCym)', stroke: '#7a5513' }, g);
+      el('ellipse', { cx, cy, rx, ry: pair ? ry * 0.55 : ry, fill: 'url(#dkCym)', stroke: '#7a5513' }, g);
+      for (const f of [0.35, 0.65]) el('ellipse', { cx, cy, rx: rx * f, ry: (pair ? ry * 0.55 : ry) * f, fill: 'none', stroke: 'rgba(122,85,19,.45)' }, g);
+      el('circle', { cx, cy, r: 3, fill: '#5b4210' }, g);
+    }
+    const ly = shell === 'kick' ? cy + 4 : shell === 'pedal' ? cy + ry + 14 : shell === 'cym' ? cy + ry + 14 : shell === 'hat' ? cy + 22 : cy + ry * 1.45 + 12;
+    txt(g, cx, ly, `${d.name} (${keyLabel(d.key)})`, { size: 11, italic: false, font: 'Inter, sans-serif' }).setAttribute('fill', shell === 'kick' ? '#f1e6d3' : '#e9dfcd');
+  }
+  bindPress(svg, e => { const p = e.target.closest('.dpad'); return p && { drum: p.dataset.d }; });
+  host.appendChild(svg);
+}
+function flashPad(kind) {
+  const p = document.querySelector(`#instView .dpad[data-d="${kind}"]`);
+  if (!p) return;
+  p.classList.remove('hit'); void p.getBBox(); p.classList.add('hit');
+  setTimeout(() => p.classList.remove('hit'), 140);
+}
+// show what is held down and what is waiting in a chord
+function instMarks() {
+  const held = [...inst.held.values()].map(h => h.note), pend = [...inst.pending.values()];
+  document.querySelectorAll('#instView .pk').forEach(k => {
+    const m = +k.dataset.m;
+    k.classList.toggle('on', held.some(n => n.midi === m));
+    k.classList.toggle('pend', pend.some(n => n.midi === m));
+  });
+  const g = document.querySelector('#instView .inst-marks');
+  if (!g || !inst.geo) return;
+  g.innerHTML = '';
+  const { fx, sy, nutX, bowed } = inst.geo;
+  const dot = (n, cls) => {
+    if (!n.str) return;
+    const x = n.fret === 0 ? nutX - 14 : bowed ? fx(n.fret) : fx(n.fret) - Math.min(14, (fx(n.fret) - fx(n.fret - 1)) * 0.35);
+    el('circle', { cx: x, cy: sy(n.str), r: 9.5, class: cls }, g);
+    txt(g, x, sy(n.str) + 3.5, midiName(n.midi).replace(/-?\d+$/, ''), { size: 9, italic: false, bold: true, font: 'Inter, sans-serif' }).setAttribute('fill', '#fff');
+  };
+  pend.forEach(n => dot(n, 'fdot pend'));
+  held.forEach(n => dot(n, 'fdot on'));
+}
+
+// ----- the panel -----
+const instBox = document.getElementById('inst');
+let instMsg = '', instErr = false;
+function instSay(msg, err) {
+  instMsg = msg; instErr = !!err;
+  const s = document.getElementById('instStatus');
+  s.textContent = msg; s.classList.toggle('err', instErr);
+}
+const UK_NAME = { breve: 'breve', whole: 'semibreve', half: 'minim', quarter: 'crotchet', eighth: 'quaver', sixteenth: 'semiquaver', thirtysecond: 'demisemiquaver',
+  sixtyfourth: 'hemidemisemiquaver', onetwentyeighth: '128th note', twofiftysixth: '256th note' };
+function instHelp() {
+  if (inst.rec) return;
+  const t = instTarget(), why = unsuitable(t), k = I().kind, name = (dotted ? 'dotted ' : '') + UK_NAME[curDur()];
+  if (why) return instSay(why, true);
+  const where = pianoPair(t) ? `staves ${t + 1}–${t + 2} (split at middle C)` : `stave ${t + 1}`;
+  if (inst.mode === 'live') return instSay(`Live: press Record, wait for the count-in, then play. Tempo comes from the ♩ = box; rhythm is rounded to the nearest ${UK_NAME[DURS.find(d => d.val === inst.grid).id]}. Writes to ${where}.`);
+  const how = k === 'keys' ? 'Click keys or type A–\' (Z/X change octave)' : k === 'drums' ? 'Hit the pads or press the letters shown' : k === 'bowed' ? 'Tap a string where your finger goes (the pale lines are first-position finger tapes; left of the nut = open string)' : 'Tap a string at a fret (left of the nut = open string)';
+  instSay(`${how}. Each press writes a ${name} to ${where}; ${inst.chord ? 'Chord is on: build the chord, then press Add chord (Enter)' : 'hold several at once for a chord'}. R adds a rest.`);
+}
+function instBar() {
+  const k = I().kind, live = inst.mode === 'live';
+  document.querySelectorAll('#inst [data-mode]').forEach(b => b.setAttribute('aria-pressed', b.dataset.mode === inst.mode));
+  document.getElementById('instChord').hidden = live;
+  document.getElementById('instChord').setAttribute('aria-pressed', inst.chord);
+  document.getElementById('instAdd').hidden = live || !inst.chord;
+  document.getElementById('instAdd').disabled = !inst.pending.size;
+  document.getElementById('instRest').hidden = live;
+  document.getElementById('instLiveOpts').hidden = !live;
+  const rec = document.getElementById('instRec');
+  rec.textContent = inst.rec ? '■ Stop' : '● Record'; rec.classList.toggle('on', !!inst.rec);
+  document.getElementById('instOct').hidden = k !== 'keys';
+  document.getElementById('instDot').setAttribute('aria-pressed', dotted);
+  instHelp();
+}
+// keeps the stave list in step with the score (called on every render)
+function instSync() {
+  if (instBox.hidden) return;
+  const pick = document.getElementById('instStave'), t = instTarget();
+  const html = state.staves.map((st, i) => `<option value="${i}">${staveLabel(st, i)}</option>`).join('');
+  if (pick.dataset.html !== html) { pick.innerHTML = html; pick.dataset.html = html; }
+  pick.value = t;
+  document.getElementById('instDot').setAttribute('aria-pressed', dotted);
+  if (!inst.rec) instHelp();
+}
+function instDraw() {
+  const host = document.getElementById('instView'), k = I().kind;
+  host.innerHTML = ''; inst.geo = null;
+  if (k === 'keys') drawPiano(host); else if (k === 'drums') drawKit(host); else drawNeck(host);
+  document.getElementById('instOctLbl').textContent = 'C' + inst.oct;
+  instMarks();
+}
+function newInstStave() {
+  const ins = I(), last = state.staves[state.staves.length - 1], blank = state.staves.length === 1 && !last.items.length && !last.marks.length;
+  const base = () => ({ ...newStave(last), clef: 'treble' });
+  let add;
+  if (ins.kind === 'keys') add = [{ ...base(), join: 'brace' }, { ...base(), clef: 'bass' }];
+  else if (ins.kind === 'drums') add = [{ ...base(), key: 0, marks: [{ d: 'clef', var: 'neutral' }] }];
+  else if (ins.kind === 'bowed') add = [{ ...base(), clef: ins.clef }];
+  else {
+    const [n, u, iw, ih] = SYMBOL_GROUPS.find(g => g.name === 'Clefs').items.find(it => it[0] === 'Tablature');
+    add = [{ ...base(), lines: 6, tuning: [...ins.tun], marks: [{ u, n, iw, ih, x: 40 }] }];
+  }
+  sel = selMark = null;
+  commit(() => { if (blank) state.staves = add; else state.staves.push(...add); });
+  inst.target = blank ? 0 : state.staves.length - add.length;
+  instSync();
+  showStave(state.staves.length - 1);
+}
+function buildInst() {
+  const pick = document.getElementById('instPick');
+  const groups = { keys: 'Keyboard', frets: 'Fretted strings', bowed: 'Bowed strings', drums: 'Percussion' };
+  pick.innerHTML = Object.entries(groups).map(([k, g]) => `<optgroup label="${g}">${Object.entries(INSTRUMENTS).filter(([, i]) => i.kind === k).map(([id, i]) => `<option value="${id}">${i.name}</option>`).join('')}</optgroup>`).join('');
+  pick.value = inst.id;
+  pick.onchange = () => { inst.id = pick.value; inst.pending.clear(); inst.group.clear(); instDraw(); instBar(); };
+  document.getElementById('instStave').onchange = e => { inst.target = +e.target.value; if (sel && sel.si !== inst.target) { sel = null; render(); } instHelp(); };
+  document.getElementById('instNew').onclick = newInstStave;
+  document.querySelectorAll('#inst [data-mode]').forEach(b => b.onclick = () => { if (inst.rec) recStop(); inst.mode = b.dataset.mode; inst.pending.clear(); instBar(); instMarks(); });
+  document.getElementById('instChord').onclick = () => { inst.chord = !inst.chord; inst.pending.clear(); instBar(); instMarks(); };
+  document.getElementById('instAdd').onclick = addPending;
+  document.getElementById('instRest').onclick = () => instWrite([]);
+  document.getElementById('instRec').onclick = () => inst.rec ? recStop() : recStart();
+  document.getElementById('instGrid').onchange = e => { inst.grid = 1 / +e.target.value; instHelp(); };
+  document.getElementById('instCount').onchange = e => inst.countIn = e.target.checked;
+  document.getElementById('instDown').onclick = () => { inst.oct = Math.max(0, inst.oct - 1); instDraw(); };
+  document.getElementById('instUp').onclick = () => { inst.oct = Math.min(6, inst.oct + 1); instDraw(); };
+  document.getElementById('instDot').onclick = () => { dotted = !dotted; document.getElementById('dotTool').setAttribute('aria-pressed', dotted); instBar(); };
+  document.getElementById('instClose').onclick = () => document.getElementById('instToggle').click();
+  // note lengths: the same tools as the tool bar, so both stay in step
+  const lens = document.getElementById('instLens');
+  DURS.slice(1, 8).forEach(d => {
+    const b = document.createElement('button');
+    b.className = 'tool'; b.dataset.kind = 'note'; b.dataset.dur = d.id; b.title = UK_NAME[d.id][0].toUpperCase() + UK_NAME[d.id].slice(1) + ' (length of each note you play)';
+    const svg = el('svg', { viewBox: d.flags >= 3 ? '-18 14 36 74' : '-15 40 30 52' });
+    drawSymbol(svg, 'note', d.id, 0, 4);
+    b.appendChild(svg);
+    b.onclick = () => { setTool({ kind: 'note', dur: d.id }); instBar(); };
+    lens.insertBefore(b, document.getElementById('instDot'));
+  });
+  setTool(tool);
+  document.getElementById('instToggle').onclick = () => {
+    const open = instBox.hidden;
+    instBox.hidden = !open;
+    document.getElementById('instToggle').setAttribute('aria-pressed', open);
+    if (!open && inst.rec) recStop();
+    if (open) { instSync(); instDraw(); instBar(); }
+  };
+  let rz;
+  window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => !instBox.hidden && instDraw(), 150); });
+  // computer keys play the instrument while the panel is open (letters only; the rest stay shortcuts)
+  const keyNote = e => {
+    const k = I().kind;
+    if (k === 'keys') { const i = PIANO_KEYS.indexOf(e.code); return i >= 0 ? { midi: 12 * (inst.kb + 1) + i } : null; }
+    if (k === 'drums') { const d = Object.keys(DRUM_KIT).find(d => DRUM_KIT[d].key === e.code); return d ? { drum: d } : null; }
+    return null;
+  };
+  document.addEventListener('keydown', e => {
+    if (instBox.hidden || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    const n = keyNote(e);
+    if (n) { stop(); if (!e.repeat) instPress('k' + e.code, n); return; }
+    if (I().kind === 'keys' && (e.code === 'KeyZ' || e.code === 'KeyX')) { stop(); inst.kb = Math.max(0, Math.min(7, inst.kb + (e.code === 'KeyZ' ? -1 : 1))); if (inst.kb < inst.oct || inst.kb > inst.oct + 2) { inst.oct = Math.max(0, Math.min(6, inst.kb - 1)); } instDraw(); return; }
+    if (e.code === 'KeyR' && inst.mode === 'step' && !inst.rec) { stop(); return instWrite([]); }
+    if (e.key === 'Enter' && inst.pending.size) { stop(); return addPending(); }
+    if (e.key === 'Escape' && inst.pending.size) { stop(); inst.pending.clear(); instBar(); return instMarks(); }
+  }, true);
+  document.addEventListener('keyup', e => { if (inst.held.has('k' + e.code)) instRelease('k' + e.code); }, true);
+  window.addEventListener('blur', () => { for (const k of [...inst.held.keys()]) instRelease(k); });
+}
+
 buildPalette();
 buildLibrary();
+buildInst();
 setTool(tool);
 render();
 document.fonts.ready.then(render);
