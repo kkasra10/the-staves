@@ -325,11 +325,11 @@ const MEASURE = { id: 'measure', name: 'Multi-measure rest', val: 0, adv: 150, f
 const durOf = id => DURS.find(d => d.id === id) || (id === 'measure' ? MEASURE : undefined);
 // A dot lengthens a note or rest by half
 const itemVal = it => durOf(it.dur).val * (it.dot ? 1.5 : 1);
-// notes under a tuplet take less time: 3 in the time of 2, 5 in the time of 4 ... (counted when bars are split, and when played)
+// notes under a tuplet take less time: 3 in the time of 2, 5 in the time of 4 ... or whatever `of` says (counted when bars are split, and when played)
 function tupletScales(st) {
   const f = st.items.map(() => 1);
   for (const m of st.marks || []) if (m.d === 'tuplet') {
-    const a = st.items.findIndex(it => it.id === m.a), num = m.num || 3, base = 2 ** Math.floor(Math.log2(num - 0.5));
+    const a = st.items.findIndex(it => it.id === m.a), num = m.num || 3, base = m.of || 2 ** Math.floor(Math.log2(num - 0.5));
     if (a >= 0) for (let k = a; k <= Math.min(st.items.length - 1, a + (m.span ?? 2)); k++) f[k] = base / num;
   }
   return f;
@@ -463,7 +463,7 @@ const NATIVE = {
     const above = R.A.up, y = above ? minOf(R.ns, n => n.top) - 9 : maxOf(R.ns, n => n.bot) + 9, h = above ? 6 : -6;
     const x0 = R.A.x - 9, x1 = R.B.x + 9, mid = (x0 + x1) / 2;
     el('path', { d: `M${x0} ${y + h} L${x0} ${y} L${mid - 9} ${y} M${mid + 9} ${y} L${x1} ${y} L${x1} ${y + h}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.3 }, g);
-    txt(g, mid, y + 5, String(m.num || 3), { size: 14 });
+    txt(g, mid, y + 5, (m.num || 3) + (m.of ? ':' + m.of : ''), { size: 14 });
     return box(x0, y - 8, x1, y + 8);
   } },
   beam: { anchor: 'note', span: 1, draw(g, m, E) {
@@ -2214,7 +2214,7 @@ const LANG = (() => {
       });
       for (let t of toks) {
         // groups may be glued on: 3*C4 D4 E4*
-        const opener = t.match(/^(\d{1,2}|8va|8vb|15va|15vb|PDLI|TAIL|V\([^)]*\))\*(.*)$/u);
+        const opener = t.match(/^(\d{1,2}(?::\d{1,2})?|8va|8vb|15va|15vb|PDLI|TAIL|V\([^)]*\))\*(.*)$/u);
         if (opener) { open.push({ kind: opener[1], items: [] }); if (!opener[2]) continue; t = opener[2]; }
         let closes = 0;
         while (t.endsWith('*') && t !== '*' && !readPitches(t) && !readPitches(t.replace(/^(N\d+|N\/\d+)\.?/u, ''))) { t = t.slice(0, -1); closes++; }
@@ -2272,7 +2272,7 @@ const LANG = (() => {
       }
       for (const g of groups) {
         const first = g.items[0], span = g.items.length - 1, kind = g.kind;
-        if (/^\d+$/.test(kind)) st.marks.push(nat('tuplet', { num: Math.max(2, +kind), span, a: first.id }));
+        if (/^\d+(:\d+)?$/.test(kind)) { const [num, of] = kind.split(':').map(Number); st.marks.push(nat('tuplet', { num: Math.max(2, num), ...(of ? { of } : {}), span, a: first.id })); }
         else if (own(OTT, kind)) st.marks.push(nat('ottava', { var: OTT[kind], span, a: first.id }));
         else if (kind === 'PDLI') st.marks.push(nat('pedline', { span, a: first.id }));
         else if (kind === 'TAIL') st.marks.push(nat('beam', { span, a: first.id }));
@@ -2314,7 +2314,7 @@ const LANG = (() => {
         else if (i < 0) continue;  // not attached to anything
         else if (m.d === 'tuplet' || m.d === 'ottava' || m.d === 'pedline' || m.d === 'beam') {
           const b = Math.min(n - 1, i + (m.span ?? NATIVE[m.d].span));
-          opens[i].push((m.d === 'tuplet' ? m.num || 3 : m.d === 'pedline' ? 'PDLI' : m.d === 'beam' ? 'TAIL' : Object.keys(OTT).find(k => OTT[k] === m.var)) + '*'); closes[b].push('*');
+          opens[i].push((m.d === 'tuplet' ? (m.num || 3) + (m.of ? ':' + m.of : '') : m.d === 'pedline' ? 'PDLI' : m.d === 'beam' ? 'TAIL' : Object.keys(OTT).find(k => OTT[k] === m.var)) + '*'); closes[b].push('*');
         } else if (Object.values(LINKS).includes(m.d)) {
           const w = m.d === 'gliss' ? (m.var === 'straight' ? 'GLSS' : 'GLSW') : Object.keys(LINKS).find(k => LINKS[k] === m.d);
           links[i].push(w + (m.span != null && m.span !== NATIVE[m.d].span ? `(${m.span})` : ''));
@@ -2367,7 +2367,7 @@ function cleanMark(m) {
   else if (typeof m.u === 'string' && IMG_PATH.test(m.u)) { o.u = m.u; o.iw = num(m.iw, 1, 1e5, 100); o.ih = num(m.ih, 1, 1e5, 100); }
   else if (typeof m.t === 'string') o.t = m.t.slice(0, 20);
   else return null;
-  const ints = { a: [0, 1e9], pi: [0, 20], span: [0, 64], bar: [0, 999], num: [1, 32], bpm: [10, 400] };
+  const ints = { a: [0, 1e9], pi: [0, 20], span: [0, 64], bar: [0, 999], num: [1, 32], of: [1, 64], bpm: [10, 400] };
   for (const k in ints) if (m[k] != null) { const v = int(m[k], ...ints[k], undefined); if (v !== undefined) o[k] = v; }
   for (const k of ['x', 'off', 'k']) if (m[k] != null) { const v = num(m[k], -5000, 5000, undefined); if (v !== undefined) o[k] = v; }
   for (const [k, max] of [['n', 80], ['var', 12], ['text', 40]]) if (m[k] != null) o[k] = str(m[k], max);
@@ -2463,7 +2463,7 @@ function readMusicXML(text) {
   const kids = (n, tag) => n ? [...n.children].filter(c => c.nodeName === tag) : [];
   const kid = (n, tag) => n && [...n.children].find(c => c.nodeName === tag);
   const val = (n, ...path) => { for (const t of path) n = kid(n, t); return n ? n.textContent.trim() : null; };
-  const staves = [], score = { marks: [], first: null, tempo: null, final: false }, skipped = { grace: 0, long: 0 };
+  const staves = [], score = { marks: [], first: null, tempo: null, final: false }, skipped = { grace: 0 };
   let notes = 0;
   kids(root, 'part').forEach(part => {
     const measures = kids(part, 'measure');
@@ -2480,20 +2480,23 @@ function readMusicXML(text) {
         else if (ch.nodeName === 'forward' || (ch.nodeName === 'note' && !kid(ch, 'chord') && !kid(ch, 'grace'))) cur += +val(ch, 'duration') || 0;
         most = Math.max(most, cur);
       }
-      return { len: most / div / 4, cap };
+      const len = most / div / 4;
+      return { len: Math.abs(len - cap) <= 2 / div / 4 ? cap : len, cap };  // a division or two out is the file rounding tuplets, not a short or long bar
     });
-    const starts = [];
+    const starts = [], ends = [];
     lens.reduce((at, m, i) => {
       const pickup = i === 0 && m.len > 1e-9 && m.len < m.cap - 1e-9;  // its notes end where the first full bar begins
       starts.push(pickup ? m.cap - m.len : at);
-      return pickup ? m.cap : at + Math.max(m.len, m.cap);
+      ends.push(pickup ? m.cap : at + Math.max(1, Math.ceil(m.len / m.cap - 0.02)) * m.cap);  // a long (cadenza) bar fills whole bars, as the stave splits it
+      return ends[i];
     }, 0);
     const total = lens.length ? starts[lens.length - 1] + Math.max(lens[lens.length - 1].len, lens[lens.length - 1].cap) : 0;
 
     // second pass: the notes, one track per staff and voice
     const staffs = {}, tracks = new Map(), pendDyn = {}, wedges = {};
     let key = null, time = null, timeSym = null, nStaves = 1;
-    const staffOf = n => staffs[n] || (staffs[n] = { clef: 'treble', clefVar: null, tab: false, tuning: null, perc: false });
+    const staffOf = n => staffs[n] || (staffs[n] = { cur: { clef: 'treble', clefVar: null }, votes: {}, tab: false, tuning: null, perc: false });
+    const ottavas = {};  // staff -> the 8va/8vb line in force: { k octaves, v sign, starts: track -> first item, ends }
     const track = (staff, voice) => {
       const k = staff + ':' + voice;
       if (!tracks.has(k)) tracks.set(k, { staff, voice, made: [], marks: [], at: 0, last: null, slurs: {}, tup: null });
@@ -2503,6 +2506,7 @@ function readMusicXML(text) {
     // rests (or tied notes) filling a length from the track's position, cut at barlines
     const fill = (t, len, notes) => {
       if (len <= 1e-6) return;
+      if (!notes) closeTuplet(t);  // rests filling a gap are never part of a tuplet
       const c = capOf(), pieces = splitLen(len, ((t.at % c) + c) % c, c);
       pieces.forEach((pc, k) => {
         const x = notes ? { ...notes(pc), extra: [] } : { item: { kind: 'rest', dur: pc.dur, ...(pc.dot ? { dot: true } : {}), id: newId() }, want: null, extra: [] };
@@ -2512,9 +2516,23 @@ function readMusicXML(text) {
       });
     };
     let div2 = 1;
+    // an 8va line: its notes are written an octave lower than they sound (MusicXML gives the sounding pitch)
+    const closeOttava = staff => {
+      const o = ottavas[staff];
+      if (!o) return;
+      for (const [t, i0] of o.starts) t.marks.push({ d: 'ottava', var: o.v, a: t.made[i0].item.id, span: o.ends.get(t) - i0 });
+      delete ottavas[staff];
+    };
+    const closeTuplet = t => {
+      if (t.tup && t.made.length > t.tup.i) t.marks.push({ d: 'tuplet', num: t.tup.num, ...(t.tup.of ? { of: t.tup.of } : {}), a: t.made[t.tup.i].item.id, span: t.made.length - 1 - t.tup.i });
+      t.tup = null;
+    };
     measures.forEach((meas, mi) => {
       let cur = 0;
-      const mStart = starts[mi];
+      const mStart = starts[mi], mEnd = ends[mi];
+      // every voice starts the bar on its barline: rests if it stopped short, and a bar that ran a hair long (tuplets rounded
+      // in the file) is let go, as the stave itself starts counting again at each barline
+      for (const t of tracks.values()) { if (t.at < mStart) fill(t, mStart - t.at); if (Math.abs(t.at - mStart) < 1 / 32) t.at = mStart; }
       for (const ch of meas.children) {
         const name = ch.nodeName;
         if (name === 'attributes') {
@@ -2530,15 +2548,14 @@ function readMusicXML(text) {
             timeSym = sym === 'common' && time === '4/4' ? 'C' : sym === 'cut' && time === '2/2' ? 'cut' : null;
           }
           for (const c of kids(ch, 'clef')) {
-            const s = staffOf(+c.getAttribute('number') || 1);
-            if (s.set) continue;
-            s.set = true;
-            const sign = val(c, 'sign'), line = +val(c, 'line') || 0, oct = +val(c, 'clef-octave-change') || 0;
-            if (sign === 'G') { s.clef = 'treble'; s.clefVar = { '-1': 'G8vb', 1: 'G8va', '-2': 'G15mb', 2: 'G15ma' }[oct] || null; }
-            else if (sign === 'F') { s.clef = 'bass'; s.clefVar = { '-1': 'F8vb', 1: 'F8va' }[oct] || null; }
-            else if (sign === 'C') s.clef = line === 4 ? 'tenor' : 'alto';
-            else if (sign === 'percussion') { s.perc = true; s.clefVar = 'neutral'; }
+            const s = staffOf(+c.getAttribute('number') || 1), sign = val(c, 'sign'), line = +val(c, 'line') || 0, oct = +val(c, 'clef-octave-change') || 0;
+            const k = { clef: 'treble', clefVar: null };
+            if (sign === 'G') k.clefVar = { '-1': 'G8vb', 1: 'G8va', '-2': 'G15mb', 2: 'G15ma' }[oct] || null;
+            else if (sign === 'F') { k.clef = 'bass'; k.clefVar = { '-1': 'F8vb', 1: 'F8va' }[oct] || null; }
+            else if (sign === 'C') k.clef = line === 4 ? 'tenor' : 'alto';
+            else if (sign === 'percussion') { s.perc = true; k.clefVar = 'neutral'; }
             else if (sign === 'TAB') s.tab = true;
+            s.cur = k;  // a stave has one clef, so it gets the one most of its notes are written in (pitches are kept whatever it is)
           }
           for (const sd of kids(ch, 'staff-details')) {
             const s = staffOf(+sd.getAttribute('number') || 1), tun = kids(sd, 'staff-tuning');
@@ -2555,6 +2572,11 @@ function readMusicXML(text) {
             const w = kid(dt, 'wedge'), type = w?.getAttribute('type');
             if (type === 'crescendo' || type === 'diminuendo') wedges[staff] = { d: type === 'crescendo' ? 'cresc' : 'dim', open: true };
             else if (type === 'stop' && wedges[staff]?.t) { const g = wedges[staff], end = g.t.made.length - 1; if (end > g.i) g.t.marks.push({ d: g.d, a: g.t.made[g.i].item.id, span: end - g.i }); delete wedges[staff]; }
+            const os = kid(dt, 'octave-shift'), ot = os?.getAttribute('type');
+            if (os && (ot === 'down' || ot === 'up')) {
+              const big = os.getAttribute('size') === '15', k = (ot === 'down' ? 1 : -1) * (big ? 2 : 1);
+              ottavas[staff] = { k, v: { 1: '8va', '-1': '8vb', 2: '15ma', '-2': '15mb' }[k], starts: new Map(), ends: new Map() };
+            } else if (os && ot === 'stop') closeOttava(staff);
             if (kid(dt, 'segno')) score.marks.push({ d: 'segno', bar: mi });
             if (kid(dt, 'coda')) score.marks.push({ d: 'coda', bar: mi });
             const words = val(dt, 'words');
@@ -2590,7 +2612,9 @@ function readMusicXML(text) {
           if (pitch) {
             const letter = 'CDEFGAB'.indexOf(val(pitch, 'step')), oct = +val(pitch, 'octave');
             p = oct * 7 + letter; want = 12 * (oct + 1) + SEMIS[letter] + Math.round(+val(pitch, 'alter') || 0);
+            if (ottavas[staff]) { p -= 7 * ottavas[staff].k; want -= 12 * ottavas[staff].k; }
           } else if (unp) p = (+val(unp, 'display-octave') || 4) * 7 + Math.max(0, 'CDEFGAB'.indexOf(val(unp, 'display-step')));
+          if (!rest && p != null && !s.perc && !s.tab) { const ck = s.cur.clef + ':' + (s.cur.clefVar || ''); s.votes[ck] = (s.votes[ck] || 0) + 1; }
           if (chord && !rest) {
             const x = t.last;
             if (x && x.item.kind === 'note' && p != null && (s.tab || !pitchesOf(x.item).includes(p))) {
@@ -2601,23 +2625,27 @@ function readMusicXML(text) {
             }
             continue;
           }
-          if (onset > t.at + 1e-6) fill(t, onset - t.at);  // a gap in this voice: rests
+          const gap = Math.round((onset - t.at) * 128) / 128;
+          if (gap > 0) fill(t, gap);  // a gap in this voice: rests
           const type = XML_DUR[val(ch, 'type')], dots = kids(ch, 'dot').length, tm = kid(ch, 'time-modification');
-          const scale = tm ? (+val(tm, 'normal-notes') || 1) / (+val(tm, 'actual-notes') || 1) : 1;
+          const real = dur / div2 / 4, ratio = tm ? (+val(tm, 'normal-notes') || 1) / (+val(tm, 'actual-notes') || 1) : 1;
+          const c = capOf(), into0 = ((t.at % c) + c) % c, into = into0 > c - 1e-6 ? 0 : into0, val0 = type ? durOf(type).val * (dots ? 1.5 : 1) : 0;
+          // the written value (and tuplet) only when it adds up to the note's real length (files round tuplets to whole divisions)
+          // and stays inside one bar of the stave; otherwise the length decides, tied over the barline
+          const exact = type && dots <= 1 && (!real || Math.abs(val0 * ratio - real) <= 1.5 / div2 / 4) && into + val0 * ratio <= c + 1e-6, scale = exact ? ratio : 1;
           const make = pc => {
             const item = { kind: rest || p == null ? 'rest' : 'note', dur: pc.dur, id: newId(), ...(pc.dot ? { dot: true } : {}) };
             if (item.kind === 'note') { item.p = p; if (s.tab) item.str = [str]; }
             return { item, want: item.kind === 'note' && !s.perc && want != null ? [want] : null };
           };
           const startIdx = t.made.length;
-          if (type && dots <= 1) {
+          if (!exact || !tm) closeTuplet(t);
+          if (exact) {
             const x = { ...make({ dur: type, dot: dots === 1 }), extra: [] };
             t.made.push(x); t.at += itemVal(x.item) * scale;
           } else {
-            if (!type) skipped.long += !!val(ch, 'type');
-            const before = t.made.length, at0 = t.at;
-            fill(t, (dur / div2 / 4) / scale, rest || p == null ? null : make);
-            t.at = at0 + (t.at - at0) * scale;  // written lengths under a tuplet take less time
+            const before = t.made.length;
+            fill(t, Math.min(Math.round(real * 256) / 256, mEnd - t.at), rest || p == null ? null : make);
             if (t.made.length === before) continue;
           }
           const x = t.made[startIdx];
@@ -2636,15 +2664,16 @@ function readMusicXML(text) {
               delete t.slurs[n];
             }
           }
-          if (tm) {
-            const tu = kids(nots, 'tuplet'), num = +val(tm, 'actual-notes') || 3;
-            if (!t.tup || tu.some(e => e.getAttribute('type') === 'start')) t.tup = { i: startIdx, num, need: num * itemVal(x.item), got: 0 };
+          if (tm && exact) {
+            const tu = kids(nots, 'tuplet'), num = Math.min(32, +val(tm, 'actual-notes') || 3), nn = Math.min(64, +val(tm, 'normal-notes') || 2);
+            const of = nn === 2 ** Math.floor(Math.log2(num - 0.5)) ? null : nn;  // the usual 3:2, 5:4 ... need no second number
+            if (t.tup && (tu.some(e => e.getAttribute('type') === 'start') || t.tup.num !== num || t.tup.of !== of)) closeTuplet(t);
+            if (!t.tup) t.tup = { i: startIdx, num, of, need: num * itemVal(x.item), got: 0 };
             t.tup.got += itemVal(x.item);
-            if (tu.some(e => e.getAttribute('type') === 'stop') || t.tup.got >= t.tup.need - 1e-9) {
-              t.marks.push({ d: 'tuplet', num: t.tup.num, a: t.made[t.tup.i].item.id, span: t.made.length - 1 - t.tup.i });
-              t.tup = null;
-            }
-          } else t.tup = null;
+            if (tu.some(e => e.getAttribute('type') === 'stop') || t.tup.got >= t.tup.need - 1e-9) closeTuplet(t);
+          }
+          const o8 = ottavas[staff];
+          if (o8) { if (!o8.starts.has(t)) o8.starts.set(t, startIdx); o8.ends.set(t, t.made.length - 1); }
           if (x.item.kind === 'note') {
             const arts = [...(kid(nots, 'articulations')?.children || []), ...kids(nots, 'fermata')];
             for (const e of arts) { const s2 = XML_ART[e.nodeName] && libSym('Articulation', XML_ART[e.nodeName]); if (s2) t.marks.push({ ...s2, a: x.item.id }); }
@@ -2655,12 +2684,16 @@ function readMusicXML(text) {
         }
       }
     });
+    Object.keys(ottavas).forEach(closeOttava);
     // every voice runs to the end of the piece, then the voices become staves (staff by staff, voice by voice)
     const order = [...tracks.values()].sort((a, b) => a.staff - b.staff || String(a.voice).localeCompare(String(b.voice), undefined, { numeric: true }));
     const first = staves.length;
     for (const t of order) {
+      closeTuplet(t);
       fill(t, total - t.at);
-      const s = staffOf(t.staff), st = { clef: s.clef, key: s.perc || s.tab ? 0 : key || 0, time: time || '4/4', timeSym, startRepeat: false, end: 'single', items: [], marks: [...t.marks] };
+      const s = staffOf(t.staff), [clef, clefVar] = (Object.entries(s.votes).sort((a, b) => b[1] - a[1])[0]?.[0] || s.cur.clef + ':' + (s.cur.clefVar || '')).split(':');
+      s.clef = clef; s.clefVar = s.perc ? 'neutral' : clefVar || null;
+      const st = { clef: s.clef, key: s.perc || s.tab ? 0 : key || 0, time: time || '4/4', timeSym, startRepeat: false, end: 'single', items: [], marks: [...t.marks] };
       if (s.clefVar) st.marks.push({ d: 'clef', var: s.clefVar });
       if (s.tab) {
         const [n, u, iw, ih] = SYMBOL_GROUPS.find(g => g.name === 'Clefs').items.find(it => it[0] === 'Tablature');
@@ -3020,7 +3053,8 @@ function barPos(st, at) {
 function splitLen(len, pos, cap) {
   const out = [];
   for (let guard = 0; len > 1e-6 && guard < 400; guard++) {
-    const room = cap - pos, take = Math.min(len, room > 1e-6 ? room : cap), v = VALUES.find(v => v[0] <= take + 1e-6);
+    if (cap - pos < 1 / 256 - 1e-9) pos = 0;  // a sliver too short for any note is the barline
+    const room = cap - pos, take = Math.min(len, room), v = VALUES.find(v => v[0] <= take + 1e-6);
     if (!v) break;
     out.push({ dur: v[1], dot: v[2] });
     len -= v[0]; pos += v[0];
