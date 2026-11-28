@@ -252,6 +252,7 @@
   </div>
   <div class="spacer"></div>
   <button class="btn play" id="play" title="Play the music (Space)">▶ Play</button>
+  <button class="btn" id="findPlaying" title="Jump to the note being played (F)" hidden>⌖ Find</button>
   <label class="tempo" title="Playback speed in beats per minute">♩ =<input id="tempo" type="number" min="20" max="400" step="1" inputmode="numeric" aria-label="Beats per minute"></label>
   <button class="btn" id="undo" title="Undo (Ctrl/Cmd+Z)">↶ Undo</button>
   <button class="btn" id="redo" title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button>
@@ -1859,6 +1860,7 @@ document.addEventListener('keydown', e => {
   if (e.key === '.') toggleDot();
   if (e.key.toLowerCase() === 'c') toggleChord();
   if (e.key.toLowerCase() === 'e') document.getElementById('eraser').click();
+  if (e.key.toLowerCase() === 'f') findPlaying();
 });
 // Keep the tool bar usable while pinch-zoomed: pin it (and an open symbol sheet) to the visible area and undo the zoom on it
 const vv = window.visualViewport;
@@ -2152,6 +2154,7 @@ function stopPlayback() {
   document.querySelectorAll('svg.stave .item.playing').forEach(g => g.classList.remove('playing'));
   const b = document.getElementById('play');
   b.textContent = '▶ Play'; b.classList.remove('on');
+  document.getElementById('findPlaying').hidden = true;
 }
 function startPlayback() {
   if (player) return stopPlayback();
@@ -2165,6 +2168,7 @@ function startPlayback() {
   player = { ctx, timers: [] };
   const b = document.getElementById('play');
   b.textContent = '■ Stop'; b.classList.add('on');
+  document.getElementById('findPlaying').hidden = false;
   const t0 = ctx.currentTime + 0.12;
   let noise = null;
   const voice = (midi, at, dur, vol, o = {}) => {
@@ -2202,7 +2206,7 @@ function startPlayback() {
   };
   const glow = (si, ii, at, dur) => {
     const ms = (at - ctx.currentTime) * 1000;
-    player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.add('playing'), ms));
+    player.timers.push(setTimeout(() => { player.now = { si, ii }; document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.add('playing'); }, ms));
     player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.remove('playing'), ms + dur * 1000 - 30));
   };
   const bars = scoreBars(spw), jobs = [];
@@ -2866,6 +2870,13 @@ document.getElementById('fileInput').onchange = e => { openScore(e.target.files[
 addEventListener('dragover', e => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); });
 addEventListener('drop', e => { if (e.dataTransfer?.files.length) { e.preventDefault(); openScore(e.dataTransfer.files[0]); } });
 document.getElementById('play').onclick = startPlayback;
+// bring the note being played into view, in the middle of the screen
+function findPlaying() {
+  if (!player) return toast('Press Play first.');
+  const g = player.now && document.querySelector(`svg.stave .item[data-si="${player.now.si}"][data-ii="${player.now.ii}"]`);
+  if (g) g.ownerSVGElement.scrollIntoView({ behavior: 'smooth', block: 'center' });  // its line (an SVG group cannot be scrolled to itself)
+}
+document.getElementById('findPlaying').onclick = findPlaying;
 // Live code: the score as Staves code; typing redraws the staves, and changes made on the staves show up here
 const liveBox = document.getElementById('liveCode'), liveStatus = document.getElementById('liveStatus');
 function syncLive() {
