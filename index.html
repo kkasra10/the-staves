@@ -2104,7 +2104,9 @@ function startPlayback() {
     player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.add('playing'), ms));
     player.timers.push(setTimeout(() => document.querySelector(`svg.stave .item[data-si="${si}"][data-ii="${ii}"]`)?.classList.remove('playing'), ms + dur * 1000 - 30));
   };
-  const bars = scoreBars(spw);
+  const bars = scoreBars(spw), jobs = [];
+  // sounds are made a moment before they are due: building every note of a long piece at once swamps the audio thread
+  const later = (at, run) => jobs.push({ at, run });
   let cursor = t0;
   for (const k of playOrder(bars)) {
     const bar = bars[k];
@@ -2113,17 +2115,26 @@ function startPlayback() {
       if (!e.silent) for (const s of e.sounds) {
         let st = at + s.off, rest = len - s.off;
         if (s.orn) {
-          for (const n of s.orn) voice(n.midi, st + n.off, n.len * 1.05, s.vol, s);
+          for (const n of s.orn) { const o = st + n.off; later(o, () => voice(n.midi, o, n.len * 1.05, s.vol, s)); }
           if (s.trill) continue;  // a trill fills the whole note
           st += s.ornEnd; rest -= s.ornEnd;
         }
-        voice(s.midi, st, Math.max(0.06, rest), s.vol, s);
+        const at1 = st, len1 = Math.max(0.06, rest);
+        later(at1, () => voice(s.midi, at1, len1, s.vol, s));
       }
       glow(si, e.ii, at, e.silent ? 0 : Math.max(0.05, e.adv * spw));
     }
     cursor += bar.len * spw;
   }
   if (cursor === t0) { stopPlayback(); return toast('Add some notes first.'); }
+  jobs.sort((a, b) => a.at - b.at);
+  let next = 0;
+  const pump = () => {
+    if (!player) return;
+    while (next < jobs.length && jobs[next].at < ctx.currentTime + 1.5) jobs[next++].run();
+    if (next < jobs.length) player.timers.push(setTimeout(pump, 250));
+  };
+  pump();
   player.timers.push(setTimeout(stopPlayback, (cursor - ctx.currentTime) * 1000 + 600));
 }
 // ---------- Staves code: Kasra's text notation for a score, one stave per line (codes follow the library, top to bottom) ----------
