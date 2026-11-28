@@ -139,6 +139,8 @@
   .stave-wrap { position: relative; }
   .stave-wrap.joined .scroller { margin-left: 22px; }
   .stave-wrap.joined .stave-head { padding-left: 34px; }
+  .stave-wrap.joined.both .scroller { margin-left: 36px; }
+  .stave-wrap.joined.both .stave-head { padding-left: 48px; }
   .stave-wrap svg.join { position: absolute; left: 2px; color: var(--line); overflow: visible; pointer-events: none; }
   .sym-btn span.lbl { font-size: 8.5px; line-height: 1.15; color: #7a746a; text-align: center; overflow: hidden;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; width: 100%; }
@@ -981,7 +983,34 @@ function repeatDots(g, x) {
 }
 
 // Lays out one stave: positions for each item, barlines, overfull bars, and the insertion point.
-function layout(stave, minWidth) {
+// Joined staves share one grid so their bars and beats line up: per bar, the x of every moment any of them has a note at,
+// each note getting at least its own width before the next moment on its stave
+const gk = t => t.toFixed(6);
+function barGrid(staves) {
+  const bars = [], start = Math.max(...staves.map(st => layout(st, 0).prefixX));
+  const repStart = new Set(), repEnd = new Set();
+  for (const st of staves) {
+    for (const m of st.marks) { if (m.d === 'repStart') repStart.add(m.bar); if (m.d === 'repEnd') repEnd.add(m.bar); }
+    const [n, d] = st.time.split('/').map(Number), cap = n / d, tup = tupletScales(st);
+    let fill = 0, b = 0;
+    st.items.forEach((it, i) => {
+      const len = it.dur === 'measure' ? cap : itemVal(it) * tup[i];
+      (bars[b] = bars[b] || []).push([fill, fill + len, itemAdv(it)]);
+      fill += len;
+      if (fill >= cap - 1e-9 && i < st.items.length - 1) { b++; fill = 0; }
+    });
+  }
+  return { start, repStart, repEnd, bars: bars.map(list => {
+    const ts = [...new Set(list.flatMap(([a, e]) => [gk(a), gk(e)]))].map(Number).sort((a, b) => a - b), x = new Map();
+    ts.forEach((t, j) => {
+      let v = j ? x.get(gk(ts[j - 1])) + 4 : 0;
+      for (const [a, e, adv] of list) if (gk(e) === gk(t)) v = Math.max(v, x.get(gk(a)) + adv);
+      x.set(gk(t), v);
+    });
+    return { x, w: x.get(gk(ts[ts.length - 1])) };
+  }) };
+}
+function layout(stave, minWidth, grid) {
   const [n, d] = stave.time.split('/').map(Number), cap = n / d;
   let x = 66;
   const out = { items: [], bars: [], over: [], showTime: true };
@@ -992,16 +1021,22 @@ function layout(stave, minWidth) {
   out.timeX = x + 16;
   if (out.showTime) x += 34;
   if (stave.startRepeat) { out.startX = x; x += 20; }
+  out.prefixX = x;
+  if (grid) x = Math.max(x, grid.start);
   x += 14;
   let fill = 0, barStart = x - 14;
   out.musicStart = x - 6;
   // repeat signs placed on inner barlines need room on their side of the barline
   const repAt = d => new Set(stave.marks.filter(m => m.d === d).map(m => m.bar));
-  const repStart = repAt('repStart'), repEnd = repAt('repEnd'), tup = tupletScales(stave);
+  const repStart = grid ? grid.repStart : repAt('repStart'), repEnd = grid ? grid.repEnd : repAt('repEnd'), tup = tupletScales(stave);
+  let origin = x;  // where this bar's music starts
   stave.items.forEach((it, ii) => {
+    const g = grid && grid.bars[out.bars.length], at = g && g.x.get(gk(fill));
+    if (at != null) x = origin + at;
     out.items.push({ x: x + 6 + (it.dur === 'measure' ? itemAdv(it) / 2 - 12 : 0) });  // a bar rest sits in the middle of its bar
     x += itemAdv(it);
     fill += it.dur === 'measure' ? cap : itemVal(it) * tup[ii];
+    if (g && fill >= cap - 1e-9) x = Math.max(x, origin + g.w);
     const last = ii === stave.items.length - 1;
     if (fill > cap + 1e-9) out.over.push([barStart, x]);
     if (fill >= cap - 1e-9 && !last) {
@@ -1010,7 +1045,7 @@ function layout(stave, minWidth) {
       out.bars.push(x + 2);
       barStart = x + 2;
       x += 18 + (repStart.has(bi) ? 18 : 0);
-      fill = 0;
+      fill = 0; origin = x;
     }
   });
   out.tailX = x + 6;
@@ -1143,6 +1178,16 @@ function drawStave(svg, stave, si, L) {
   }
 }
 
+// a brace or bracket from the top line of stave svg a to the bottom line of stave svg b, `left` px into the card
+function sign(wrap, a, b, kind, left) {
+  const wr = wrap.getBoundingClientRect(), top = a.getBoundingClientRect().top - wr.top + yOf(0), bot = b.getBoundingClientRect().top - wr.top + yOf(8), h = bot - top;
+  const o = el('svg', { class: 'join', width: 22, height: h, viewBox: `0 0 22 ${h}` });
+  o.style.top = top + 'px'; o.style.left = left + 'px';
+  if (kind === 'brace') el('path', { d: `M18 0 C2 ${h * 0.05} 15 ${h * 0.44} 2 ${h / 2} C15 ${h * 0.56} 2 ${h * 0.95} 18 ${h} C10 ${h * 0.9} 21 ${h * 0.58} 8 ${h / 2} C21 ${h * 0.42} 10 ${h * 0.1} 18 0Z`, fill: 'currentColor' }, o);
+  else { el('rect', { x: 8, y: -2, width: 5, height: h + 4, fill: 'currentColor' }, o); el('path', { d: `M8 -2 Q16 -2 21 -9 M8 ${h + 2} Q16 ${h + 2} 21 ${h + 9}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4 }, o); }
+  line(o, 21.5, 0, 21.5, h, 1.5);
+  wrap.appendChild(o);
+}
 function render() {
   syncLive();
   for (const st of state.staves) for (const it of st.items) lastId = Math.max(lastId, it.id || 0);
@@ -1152,14 +1197,27 @@ function render() {
   const sx = [...host.querySelectorAll('.scroller')].map(s => s.scrollLeft);
   host.innerHTML = '';
   const minWidth = Math.max(320, host.clientWidth - 2);
+  // staves joined into a system share a bar grid and a width, so their bars line up and end together
+  const Ls = [];
+  for (let si = 0; si < state.staves.length;) {
+    let last = si;
+    while (state.staves[last].join && last + 1 < state.staves.length) last++;
+    const grp = state.staves.slice(si, last + 1);
+    grp.forEach(st => { if (!st.marks) st.marks = []; });
+    const grid = grp.length > 1 ? barGrid(grp) : null, ls = grp.map(st => layout(st, minWidth, grid)), w = Math.max(...ls.map(l => l.width));
+    ls.forEach((l, k) => { l.width = w; Ls[si + k] = l; });
+    si = last + 1;
+  }
   const joins = [];
-  let prevWrap = null;
+  let prevWrap = null, card = null;
   state.staves.forEach((stave, si) => {
     // a brace or bracket joins a stave to the one below it: both go in one card with the sign down the left
     const joined = si > 0 && state.staves[si - 1].join && prevWrap;
     const wrap = joined ? prevWrap : document.createElement('div');
     if (!joined) wrap.className = 'stave-wrap';
-    if (stave.join && si < state.staves.length - 1) { wrap.classList.add('joined'); joins.push({ wrap, kind: stave.join, si }); }
+    if (!joined) card = { wrap, sis: [] };
+    card.sis.push(si);
+    if (stave.join && si < state.staves.length - 1 && !joined) { wrap.classList.add('joined'); joins.push(card); }
     prevWrap = wrap;
     const head = document.createElement('div');
     head.className = 'stave-head';
@@ -1200,7 +1258,7 @@ function render() {
     wrap.appendChild(head);
 
     if (!stave.marks) stave.marks = [];
-    const L = layout(stave, minWidth);
+    const L = Ls[si];
     const svg = el('svg', { viewBox: `0 0 ${L.width} ${H}`, width: L.width, height: H, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : '') });
     drawStave(svg, stave, si, L);
 
@@ -1453,22 +1511,22 @@ function render() {
     const scroller = document.createElement('div');
     scroller.className = 'scroller';
     scroller.appendChild(svg);
+    // the staves of a system scroll together
+    scroller.onscroll = () => wrap.querySelectorAll('.scroller').forEach(o => { if (o !== scroller && Math.abs(o.scrollLeft - scroller.scrollLeft) > 1) o.scrollLeft = scroller.scrollLeft; });
     wrap.appendChild(scroller);
     host.appendChild(wrap);
     scroller.scrollLeft = sx[si] || 0;
     if (reveal && reveal.si === si && reveal.x > scroller.scrollLeft + scroller.clientWidth)
       scroller.scrollLeft = reveal.x - scroller.clientWidth;
   });
+  // one card per joined system: a bracket down the whole of it, a brace round each run of staves joined by a brace (a piano)
   for (const j of joins) {
-    const svgs = j.wrap.querySelectorAll('svg.stave'), a = svgs[0], b = svgs[svgs.length - 1];
-    if (!a || a === b) continue;
-    const wr = j.wrap.getBoundingClientRect(), top = a.getBoundingClientRect().top - wr.top + yOf(0), bot = b.getBoundingClientRect().top - wr.top + yOf(8), h = bot - top;
-    const o = el('svg', { class: 'join', width: 22, height: h, viewBox: `0 0 22 ${h}` });
-    o.style.top = top + 'px';
-    if (j.kind === 'brace') el('path', { d: `M18 0 C2 ${h * 0.05} 15 ${h * 0.44} 2 ${h / 2} C15 ${h * 0.56} 2 ${h * 0.95} 18 ${h} C10 ${h * 0.9} 21 ${h * 0.58} 8 ${h / 2} C21 ${h * 0.42} 10 ${h * 0.1} 18 0Z`, fill: 'currentColor' }, o);
-    else { el('rect', { x: 8, y: -2, width: 5, height: h + 4, fill: 'currentColor' }, o); el('path', { d: `M8 -2 Q16 -2 21 -9 M8 ${h + 2} Q16 ${h + 2} 21 ${h + 9}`, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.4 }, o); }
-    line(o, 21.5, 0, 21.5, h, 1.5);
-    j.wrap.appendChild(o);
+    const svgs = j.wrap.querySelectorAll('svg.stave'), kinds = j.sis.slice(0, -1).map(si => state.staves[si].join);
+    if (svgs.length < 2) continue;
+    const bracket = kinds.includes('bracket');
+    j.wrap.classList.toggle('both', bracket && kinds.includes('brace'));
+    if (bracket) sign(j.wrap, svgs[0], svgs[svgs.length - 1], 'bracket', 2);
+    for (let a = 0; a < kinds.length; a++) if (kinds[a] === 'brace') { let b = a; while (kinds[b] === 'brace') b++; sign(j.wrap, svgs[a], svgs[b], 'brace', bracket ? 16 : 2); a = b; }
   }
   reveal = null;
   showTempo();
