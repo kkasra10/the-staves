@@ -312,7 +312,7 @@
 <script>
 const NS = 'http://www.w3.org/2000/svg';
 const H = 180, TOP = 62, GAP = 13, STEP = GAP / 2;  // staff step 0 = top line, 8 = bottom line
-const MIN_STEP = -6, MAX_STEP = 14;
+const MIN_STEP = -16, MAX_STEP = 24;  // as far as notes go: five more ledger lines each way than fit the usual stave height
 const DURS = [
   { id: 'breve', name: 'Breve (double whole)', val: 2, adv: 104, flags: 0, filled: false, stem: false },
   { id: 'whole', name: 'Whole', val: 1, adv: 84, flags: 0, filled: false, stem: false },
@@ -1183,15 +1183,17 @@ function drawStave(svg, stave, si, L, win) {
 }
 
 // the start of a continuation line: staff lines, clef and key signature again (the time signature only shows once)
-function prefixSvg(stave, si, L, clefGs, f) {
-  const w = L.timeX - 8, svg = el('svg', { viewBox: `0 0 ${w} ${H}`, width: w * f, height: H * f, class: 'pre' });
+function prefixSvg(stave, si, L, clefGs, f, V) {
+  const w = L.timeX - 8, svg = el('svg', { viewBox: `0 ${V.y0} ${w} ${V.h}`, width: w * f, height: V.h * f, class: 'pre' });
   drawStave(svg, { ...stave, end: null }, si, { ...L, width: w + 10, over: [], bars: [], showTime: false, startX: null });
   for (const g of clefGs) svg.appendChild(g.cloneNode(true));
   return svg;
 }
 // a brace or bracket from the top line of stave svg a to the bottom line of stave svg b, `left` px into the card
 function sign(wrap, a, b, kind, left) {
-  const wr = wrap.getBoundingClientRect(), top = a.getBoundingClientRect().top - wr.top + yOf(0), bot = b.getBoundingClientRect().top - wr.top + yOf(8), h = bot - top;
+  // where a stave line lands on screen, whatever the svg's height and shrink
+  const at = (svg, y) => { const r = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal; return r.top + (y - vb.y) * r.height / vb.height; };
+  const wr = wrap.getBoundingClientRect(), top = at(a, yOf(0)) - wr.top, bot = at(b, yOf(8)) - wr.top, h = bot - top;
   const o = el('svg', { class: 'join', width: 22, height: h, viewBox: `0 0 22 ${h}` });
   o.style.top = top + 'px'; o.style.left = left + 'px';
   if (kind === 'brace') el('path', { d: `M18 0 C2 ${h * 0.05} 15 ${h * 0.44} 2 ${h / 2} C15 ${h * 0.56} 2 ${h * 0.95} 18 ${h} C10 ${h * 0.9} 21 ${h * 0.58} 8 ${h / 2} C21 ${h * 0.42} 10 ${h * 0.1} 18 0Z`, fill: 'currentColor' }, o);
@@ -1287,6 +1289,9 @@ function render() {
     lineBox(0).appendChild(head);
 
     if (!stave.marks) stave.marks = [];
+    // the stave grows taller when notes go above or below it, so high and low notes and their ledger lines are not cut off
+    const steps = isTab(stave) ? [] : stave.items.flatMap(it => it.kind === 'note' ? pitchesOf(it).map(p => pitchToStep(stave.clef, p)) : []);
+    const y0 = Math.min(0, Math.floor(yOf(Math.min(0, ...steps)) - 45)), V = { y0, h: Math.max(H, Math.ceil(yOf(Math.max(8, ...steps)) + 45)) - y0 };
     const L = Ls[si], clefGs = [], idOf = new Map(stave.items.map((it, i) => [it.id, i]));
     // tablature: string and fret of every note
     const tabM = isTab(stave) && writtenMidis(stave), tab = tabM && stave.items.map((it, i) => tabFrets(tabM[i], it.str, tuningOf(stave)));
@@ -1310,7 +1315,7 @@ function render() {
       stave.items.forEach((it, i) => { if (it.kind === 'rest' && L.items[i].x > E.barXs[a] && L.items[i].x < E.barXs[b + 1]) simileRests.add(i); });
     }
     Wins[si].forEach((win, k) => {
-      const svg = el('svg', { viewBox: `${win.s} 0 ${win.e - win.s} ${H}`, width: (win.e - win.s) * win.f, height: H * win.f, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : ''), 'data-si': si });
+      const svg = el('svg', { viewBox: `${win.s} ${V.y0} ${win.e - win.s} ${V.h}`, width: (win.e - win.s) * win.f, height: V.h * win.f, class: 'stave' + (tool.kind === 'erase' ? ' erasing' : ''), 'data-si': si });
       drawStave(svg, stave, si, L, win);
 
       stave.items.forEach((it, ii) => {
@@ -1454,10 +1459,10 @@ function render() {
       const insAt = sel && sel.si === si ? sel.ii + 1 : stave.items.length;
       const insX = insAt < stave.items.length ? (L.items[insAt - 1].x + L.items[insAt].x) / 2 : L.tailX;
       const ghost = el('g', { opacity: .4, 'pointer-events': 'none' }, svg);
-      const svgPoint = e => { const r = svg.getBoundingClientRect(); return { x: (e.clientX - r.left) * ((win.e - win.s) / r.width) + win.s, y: (e.clientY - r.top) * (H / r.height) }; };
+      const svgPoint = e => { const r = svg.getBoundingClientRect(); return { x: (e.clientX - r.left) * ((win.e - win.s) / r.width) + win.s, y: (e.clientY - r.top) * (V.h / r.height) + V.y0 }; };
       const stepAt = e => {
         const r = svg.getBoundingClientRect();
-        return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round(((e.clientY - r.top) * (H / r.height) - TOP) / STEP)));
+        return Math.max(MIN_STEP, Math.min(MAX_STEP, Math.round(((e.clientY - r.top) * (V.h / r.height) + V.y0 - TOP) / STEP)));
       };
       const stringAt = e => { const y = svgPoint(e).y; let b = 1; for (let s = 2; s <= tuningOf(stave).length; s++) if (Math.abs(tabY(s) - y) < Math.abs(tabY(b) - y)) b = s; return b; };
       // on tab, a tap picks the string and asks for the fret; the note is stored as its pitch (plus an accidental if needed)
@@ -1553,7 +1558,7 @@ function render() {
 
       const row = document.createElement('div');
       row.className = 'scroller';
-      if (k > 0) row.appendChild(prefixSvg(stave, si, L, clefGs, win.f));
+      if (k > 0) row.appendChild(prefixSvg(stave, si, L, clefGs, win.f, V));
       row.appendChild(svg);
       lineBox(k).appendChild(row);
     });
