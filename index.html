@@ -256,8 +256,8 @@
   <button class="btn" id="instToggle" aria-pressed="false" title="Play a piano, guitar, violin or drum kit; what you play is written on a stave">♪ Instruments</button>
   <button class="btn" id="liveToggle" aria-pressed="false" title="Write the score as Staves code; the staves update as you type">✎ Live code</button>
   <button class="btn" id="saveCode" title="Download this score as Staves code (.staves)">⬇ Code</button>
-  <button class="btn" id="openFile" title="Open a score file">⬆ Open</button>
-  <input type="file" id="fileInput" accept=".json,.staves,.txt,application/json,text/plain" hidden>
+  <button class="btn" id="openFile" title="Open a score file (THE-Staves .json or .staves, or MusicXML .mxl / .musicxml)">⬆ Open</button>
+  <input type="file" id="fileInput" accept=".json,.staves,.txt,.mxl,.musicxml,.xml,application/json,text/plain,application/vnd.recordare.musicxml,application/vnd.recordare.musicxml+xml" hidden>
 </div>
 
 <div class="layout">
@@ -2412,11 +2412,298 @@ function saveScore(fmt = 'json') {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+// ---------- MusicXML (.musicxml, .xml) and compressed MusicXML (.mxl): each part, staff and voice becomes a stave, all joined so they sound together ----------
+// the files inside a zip (an .mxl is one), read with the browser's own inflate
+async function zipFiles(buf) {
+  const b = new Uint8Array(buf), dv = new DataView(buf);
+  let end = -1;
+  for (let i = b.length - 22; i >= Math.max(0, b.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  if (end < 0) throw new Error('it is not a zip file');
+  const files = new Map();
+  for (let k = 0, p = dv.getUint32(end + 16, true), n = dv.getUint16(end + 10, true); k < n; k++) {
+    if (p + 46 > b.length || dv.getUint32(p, true) !== 0x02014b50) throw new Error('its zip directory is damaged');
+    const nl = dv.getUint16(p + 28, true), name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nl));
+    files.set(name, { method: dv.getUint16(p + 10, true), size: dv.getUint32(p + 20, true), full: dv.getUint32(p + 24, true), off: dv.getUint32(p + 42, true) });
+    p += 46 + nl + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+  }
+  const read = async name => {
+    const f = files.get(name);
+    if (!f) return null;
+    if (f.full > 60e6) throw new Error('it unpacks to more than 60 MB');
+    const start = f.off + 30 + dv.getUint16(f.off + 26, true) + dv.getUint16(f.off + 28, true), data = b.subarray(start, start + f.size);
+    if (f.method === 0) return data;
+    if (f.method !== 8) throw new Error('it uses a zip compression this app cannot read');
+    if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot unzip files (try a .musicxml file instead)');
+    return new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+  };
+  return { names: [...files.keys()], read };
+}
+const xmlText = bytes => new TextDecoder(bytes[0] === 0xFF && bytes[1] === 0xFE ? 'utf-16le' : bytes[0] === 0xFE && bytes[1] === 0xFF ? 'utf-16be' : 'utf-8').decode(bytes);
+// the score inside an .mxl: the file META-INF/container.xml points to, else the first XML file outside META-INF
+async function mxlScore(buf) {
+  const zip = await zipFiles(buf), container = await zip.read('META-INF/container.xml');
+  let path = container && new DOMParser().parseFromString(xmlText(container), 'application/xml').querySelector('rootfile')?.getAttribute('full-path');
+  if (!path || !zip.names.includes(path)) path = zip.names.find(n => /\.(musicxml|xml)$/i.test(n) && !n.startsWith('META-INF/'));
+  if (!path) throw new Error('there is no score inside it');
+  return xmlText(await zip.read(path));
+}
+const XML_DUR = { breve: 'breve', whole: 'whole', half: 'half', quarter: 'quarter', eighth: 'eighth', '16th': 'sixteenth', '32nd': 'thirtysecond',
+  '64th': 'sixtyfourth', '128th': 'onetwentyeighth', '256th': 'twofiftysixth' };
+const XML_DYN = { ppp: 'Pianississimo', pp: 'Pianissimo', p: 'Piano', mp: 'Mezzo piano', mf: 'Mezzo forte', f: 'Forte', ff: 'Fortissimo', fff: 'Fortississimo', sfz: 'Sforzando', fp: 'Fortepiano' };
+const XML_ART = { staccato: 'Staccato', staccatissimo: 'Staccatissimo', tenuto: 'Tenuto', accent: 'Accent', 'strong-accent': 'Marcato', fermata: 'Fermata or Pause' };
+const libSym = (group, name) => {
+  const it = SYMBOL_GROUPS.find(g => g.name.startsWith(group))?.items.find(it => it[0].startsWith(name) && it[1] !== 'native');
+  return it && { u: it[1], n: it[0], iw: it[2], ih: it[3] };
+};
+function readMusicXML(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml'), root = doc.documentElement;
+  if (doc.querySelector('parsererror')) throw new Error('it is not valid XML');
+  if (root.nodeName === 'score-timewise') throw new Error('timewise MusicXML is not supported (export it as partwise, the usual kind)');
+  if (root.nodeName !== 'score-partwise') throw new Error('it is not a MusicXML score');
+  const kids = (n, tag) => n ? [...n.children].filter(c => c.nodeName === tag) : [];
+  const kid = (n, tag) => n && [...n.children].find(c => c.nodeName === tag);
+  const val = (n, ...path) => { for (const t of path) n = kid(n, t); return n ? n.textContent.trim() : null; };
+  const staves = [], score = { marks: [], first: null, tempo: null, final: false }, skipped = { grace: 0, long: 0 };
+  let notes = 0;
+  kids(root, 'part').forEach(part => {
+    const measures = kids(part, 'measure');
+    // first pass: how long each measure really is, and the time signature it is in (so a pickup bar can be padded to a whole bar)
+    let div = 1, cap = 1;
+    const lens = measures.map(meas => {
+      let cur = 0, most = 0;
+      for (const ch of meas.children) {
+        if (ch.nodeName === 'attributes') {
+          div = +val(ch, 'divisions') || div;
+          const t = kid(ch, 'time');
+          if (t && val(t, 'beats')) cap = val(t, 'beats').split('+').reduce((s, v) => s + (+v || 0), 0) / (+val(t, 'beat-type') || 4) || cap;
+        } else if (ch.nodeName === 'backup') cur -= +val(ch, 'duration') || 0;
+        else if (ch.nodeName === 'forward' || (ch.nodeName === 'note' && !kid(ch, 'chord') && !kid(ch, 'grace'))) cur += +val(ch, 'duration') || 0;
+        most = Math.max(most, cur);
+      }
+      return { len: most / div / 4, cap };
+    });
+    const starts = [];
+    lens.reduce((at, m, i) => {
+      const pickup = i === 0 && m.len > 1e-9 && m.len < m.cap - 1e-9;  // its notes end where the first full bar begins
+      starts.push(pickup ? m.cap - m.len : at);
+      return pickup ? m.cap : at + Math.max(m.len, m.cap);
+    }, 0);
+    const total = lens.length ? starts[lens.length - 1] + Math.max(lens[lens.length - 1].len, lens[lens.length - 1].cap) : 0;
+
+    // second pass: the notes, one track per staff and voice
+    const staffs = {}, tracks = new Map(), pendDyn = {}, wedges = {};
+    let key = null, time = null, timeSym = null, nStaves = 1;
+    const staffOf = n => staffs[n] || (staffs[n] = { clef: 'treble', clefVar: null, tab: false, tuning: null, perc: false });
+    const track = (staff, voice) => {
+      const k = staff + ':' + voice;
+      if (!tracks.has(k)) tracks.set(k, { staff, voice, made: [], marks: [], at: 0, last: null, slurs: {}, tup: null });
+      return tracks.get(k);
+    };
+    const capOf = () => time ? time.split('/').reduce((n, d) => n / d) : 1;
+    // rests (or tied notes) filling a length from the track's position, cut at barlines
+    const fill = (t, len, notes) => {
+      if (len <= 1e-6) return;
+      const c = capOf(), pieces = splitLen(len, ((t.at % c) + c) % c, c);
+      pieces.forEach((pc, k) => {
+        const x = notes ? { ...notes(pc), extra: [] } : { item: { kind: 'rest', dur: pc.dur, ...(pc.dot ? { dot: true } : {}), id: newId() }, want: null, extra: [] };
+        if (notes && k < pieces.length - 1) t.marks.push({ d: 'tie', a: x.item.id });
+        t.made.push(x);
+        t.at += itemVal(x.item);
+      });
+    };
+    let div2 = 1;
+    measures.forEach((meas, mi) => {
+      let cur = 0;
+      const mStart = starts[mi];
+      for (const ch of meas.children) {
+        const name = ch.nodeName;
+        if (name === 'attributes') {
+          div2 = +val(ch, 'divisions') || div2;
+          nStaves = Math.max(nStaves, +val(ch, 'staves') || 1);
+          const k = kid(ch, 'key');
+          if (k && key == null && val(k, 'fifths') != null) key = Math.max(-7, Math.min(7, Math.round(+val(k, 'fifths') || 0)));
+          const t = kid(ch, 'time');
+          if (t && time == null && val(t, 'beats')) {
+            const n = val(t, 'beats').split('+').reduce((s, v) => s + (+v || 0), 0), d = +val(t, 'beat-type') || 4;
+            time = n > 0 && n < 100 && d > 0 && d < 100 ? `${n}/${d}` : '4/4';
+            const sym = t.getAttribute('symbol');
+            timeSym = sym === 'common' && time === '4/4' ? 'C' : sym === 'cut' && time === '2/2' ? 'cut' : null;
+          }
+          for (const c of kids(ch, 'clef')) {
+            const s = staffOf(+c.getAttribute('number') || 1);
+            if (s.set) continue;
+            s.set = true;
+            const sign = val(c, 'sign'), line = +val(c, 'line') || 0, oct = +val(c, 'clef-octave-change') || 0;
+            if (sign === 'G') { s.clef = 'treble'; s.clefVar = { '-1': 'G8vb', 1: 'G8va', '-2': 'G15mb', 2: 'G15ma' }[oct] || null; }
+            else if (sign === 'F') { s.clef = 'bass'; s.clefVar = { '-1': 'F8vb', 1: 'F8va' }[oct] || null; }
+            else if (sign === 'C') s.clef = line === 4 ? 'tenor' : 'alto';
+            else if (sign === 'percussion') { s.perc = true; s.clefVar = 'neutral'; }
+            else if (sign === 'TAB') s.tab = true;
+          }
+          for (const sd of kids(ch, 'staff-details')) {
+            const s = staffOf(+sd.getAttribute('number') || 1), tun = kids(sd, 'staff-tuning');
+            if (!tun.length) continue;
+            const ms = tun.map(st => [+st.getAttribute('line') || 0, 12 * ((+val(st, 'tuning-octave') || 0) + 1) + SEMIS['CDEFGAB'.indexOf(val(st, 'tuning-step'))] + (+val(st, 'tuning-alter') || 0)]);
+            if (ms.every(([, m]) => m >= 0 && m <= 127)) s.tuning = ms.sort((a, b) => b[0] - a[0]).map(([, m]) => m);
+          }
+        } else if (name === 'backup') cur -= +val(ch, 'duration') || 0;
+        else if (name === 'forward') cur += +val(ch, 'duration') || 0;
+        else if (name === 'direction') {
+          const staff = +val(ch, 'staff') || 1;
+          for (const dt of kids(ch, 'direction-type')) {
+            for (const dy of kids(dt, 'dynamics')) for (const e of dy.children) { const s = XML_DYN[e.nodeName] && libSym('Dynamics', XML_DYN[e.nodeName]); if (s) (pendDyn[staff] = pendDyn[staff] || []).push(s); }
+            const w = kid(dt, 'wedge'), type = w?.getAttribute('type');
+            if (type === 'crescendo' || type === 'diminuendo') wedges[staff] = { d: type === 'crescendo' ? 'cresc' : 'dim', open: true };
+            else if (type === 'stop' && wedges[staff]?.t) { const g = wedges[staff], end = g.t.made.length - 1; if (end > g.i) g.t.marks.push({ d: g.d, a: g.t.made[g.i].item.id, span: end - g.i }); delete wedges[staff]; }
+            if (kid(dt, 'segno')) score.marks.push({ d: 'segno', bar: mi });
+            if (kid(dt, 'coda')) score.marks.push({ d: 'coda', bar: mi });
+            const words = val(dt, 'words');
+            const dir = words && ['D.C. al Fine', 'D.C. al Coda', 'D.S. al Fine', 'D.S. al Coda', 'D.C.', 'D.S.', 'Fine', 'To Coda'].find(d => words.replace(/\s+/g, ' ').toLowerCase().startsWith(d.toLowerCase()));
+            if (dir) score.marks.push({ d: 'dir', text: dir, bar: mi });
+            const mm = kid(dt, 'metronome');
+            if (mm && score.tempo == null && +val(mm, 'per-minute') > 0) score.tempo = { bpm: +val(mm, 'per-minute'), unit: { half: 'half' }[val(mm, 'beat-unit')] || 'quarter', dotted: !!kid(mm, 'beat-unit-dot') };
+          }
+          const snd = kid(ch, 'sound');
+          if (snd && score.tempo == null && +snd.getAttribute('tempo') > 0) score.tempo = { bpm: +snd.getAttribute('tempo'), unit: 'quarter' };
+        } else if (name === 'barline') {
+          const loc = ch.getAttribute('location') || 'right', rep = kid(ch, 'repeat')?.getAttribute('direction');
+          if (rep === 'forward') score.marks.push({ d: 'repStart', bar: mi });
+          if (rep === 'backward') score.marks.push({ d: 'repEnd', bar: mi + 1 });
+          const en = kid(ch, 'ending'), et = en?.getAttribute('type');
+          if (en && et === 'start') score.endings = { ...score.endings, [en.getAttribute('number')]: mi };
+          else if (en && (et === 'stop' || et === 'discontinue') && score.endings?.[en.getAttribute('number')] != null) {
+            const num = en.getAttribute('number'), from = score.endings[num];
+            score.marks.push({ d: 'volta', text: num.split(/[\s,]+/).filter(Boolean).map(n => n + '.').join(' '), bar: from, span: mi - from + 1, ...(et === 'discontinue' ? { closed: false } : {}) });
+            delete score.endings[num];
+          }
+          if (loc === 'right' && mi === measures.length - 1 && val(ch, 'bar-style') === 'light-heavy') score.final = true;
+        } else if (name === 'note') {
+          const chord = !!kid(ch, 'chord'), dur = +val(ch, 'duration') || 0;
+          if (kid(ch, 'grace')) { skipped.grace++; continue; }
+          const staff = +val(ch, 'staff') || 1, t = track(staff, val(ch, 'voice') || '1'), s = staffOf(staff);
+          const onset = mStart + (cur - (chord ? t.lastDur || 0 : 0)) / div2 / 4;
+          if (!chord) cur += dur;
+          t.lastDur = dur;
+          const pitch = kid(ch, 'pitch'), unp = kid(ch, 'unpitched'), rest = !!kid(ch, 'rest') || kid(ch, 'cue');
+          const tech = kid(kid(ch, 'notations'), 'technical'), str = +val(tech, 'string') || 0;
+          let p = null, want = null;
+          if (pitch) {
+            const letter = 'CDEFGAB'.indexOf(val(pitch, 'step')), oct = +val(pitch, 'octave');
+            p = oct * 7 + letter; want = 12 * (oct + 1) + SEMIS[letter] + Math.round(+val(pitch, 'alter') || 0);
+          } else if (unp) p = (+val(unp, 'display-octave') || 4) * 7 + Math.max(0, 'CDEFGAB'.indexOf(val(unp, 'display-step')));
+          if (chord && !rest) {
+            const x = t.last;
+            if (x && x.item.kind === 'note' && p != null && (s.tab || !pitchesOf(x.item).includes(p))) {
+              (x.item.ch = x.item.ch || []).push(p);
+              if (x.want) x.want.push(want);
+              if (s.tab) x.item.str.push(str);
+              notes++;
+            }
+            continue;
+          }
+          if (onset > t.at + 1e-6) fill(t, onset - t.at);  // a gap in this voice: rests
+          const type = XML_DUR[val(ch, 'type')], dots = kids(ch, 'dot').length, tm = kid(ch, 'time-modification');
+          const scale = tm ? (+val(tm, 'normal-notes') || 1) / (+val(tm, 'actual-notes') || 1) : 1;
+          const make = pc => {
+            const item = { kind: rest || p == null ? 'rest' : 'note', dur: pc.dur, id: newId(), ...(pc.dot ? { dot: true } : {}) };
+            if (item.kind === 'note') { item.p = p; if (s.tab) item.str = [str]; }
+            return { item, want: item.kind === 'note' && !s.perc && want != null ? [want] : null };
+          };
+          const startIdx = t.made.length;
+          if (type && dots <= 1) {
+            const x = { ...make({ dur: type, dot: dots === 1 }), extra: [] };
+            t.made.push(x); t.at += itemVal(x.item) * scale;
+          } else {
+            if (!type) skipped.long += !!val(ch, 'type');
+            const before = t.made.length, at0 = t.at;
+            fill(t, (dur / div2 / 4) / scale, rest || p == null ? null : make);
+            t.at = at0 + (t.at - at0) * scale;  // written lengths under a tuplet take less time
+            if (t.made.length === before) continue;
+          }
+          const x = t.made[startIdx];
+          t.last = t.made[t.made.length - 1];
+          if (x.item.kind === 'note') notes++;
+          if (!score.first && x.item.kind === 'note') score.first = { t, id: x.item.id };
+          // things that hang on this note: ties, slurs, tuplets, articulations, dynamics and hairpins waiting for it
+          if (kids(ch, 'tie').some(e => e.getAttribute('type') === 'start') && x.item.kind === 'note') t.marks.push({ d: 'tie', a: t.last.item.id });
+          const nots = kid(ch, 'notations');
+          for (const sl of kids(nots, 'slur')) {
+            const n = sl.getAttribute('number') || '1';
+            if (sl.getAttribute('type') === 'start') t.slurs[n] = startIdx;
+            else if (sl.getAttribute('type') === 'stop' && t.slurs[n] != null) {
+              const a = t.slurs[n], span = t.made.length - 1 - a;
+              if (span > 0) t.marks.push({ d: 'slur', a: t.made[a].item.id, span });
+              delete t.slurs[n];
+            }
+          }
+          if (tm) {
+            const tu = kids(nots, 'tuplet'), num = +val(tm, 'actual-notes') || 3;
+            if (!t.tup || tu.some(e => e.getAttribute('type') === 'start')) t.tup = { i: startIdx, num, need: num * itemVal(x.item), got: 0 };
+            t.tup.got += itemVal(x.item);
+            if (tu.some(e => e.getAttribute('type') === 'stop') || t.tup.got >= t.tup.need - 1e-9) {
+              t.marks.push({ d: 'tuplet', num: t.tup.num, a: t.made[t.tup.i].item.id, span: t.made.length - 1 - t.tup.i });
+              t.tup = null;
+            }
+          } else t.tup = null;
+          if (x.item.kind === 'note') {
+            const arts = [...(kid(nots, 'articulations')?.children || []), ...kids(nots, 'fermata')];
+            for (const e of arts) { const s2 = XML_ART[e.nodeName] && libSym('Articulation', XML_ART[e.nodeName]); if (s2) t.marks.push({ ...s2, a: x.item.id }); }
+            for (const d of pendDyn[staff] || []) t.marks.push({ ...d, a: x.item.id });
+            delete pendDyn[staff];
+            if (wedges[staff]?.open) { wedges[staff] = { ...wedges[staff], open: false, t, i: startIdx }; }
+          }
+        }
+      }
+    });
+    // every voice runs to the end of the piece, then the voices become staves (staff by staff, voice by voice)
+    const order = [...tracks.values()].sort((a, b) => a.staff - b.staff || String(a.voice).localeCompare(String(b.voice), undefined, { numeric: true }));
+    const first = staves.length;
+    for (const t of order) {
+      fill(t, total - t.at);
+      const s = staffOf(t.staff), st = { clef: s.clef, key: s.perc || s.tab ? 0 : key || 0, time: time || '4/4', timeSym, startRepeat: false, end: 'single', items: [], marks: [...t.marks] };
+      if (s.clefVar) st.marks.push({ d: 'clef', var: s.clefVar });
+      if (s.tab) {
+        const [n, u, iw, ih] = SYMBOL_GROUPS.find(g => g.name === 'Clefs').items.find(it => it[0] === 'Tablature');
+        Object.assign(st, { lines: 6, tuning: s.tuning || [...TUNINGS.GTR.m] });
+        st.marks.push({ u, n, iw, ih, x: 40 });
+      }
+      placeItems(st, 0, t.made);
+      t.stave = st;
+      staves.push(st);
+    }
+    // a part's staves are joined by a brace when it has several staves (a piano), the parts by brackets
+    for (let i = first; i < staves.length; i++) staves[i].join = nStaves > 1 && i < staves.length - 1 ? 'brace' : 'bracket';
+  });
+  if (!staves.length) throw new Error('there are no notes in it');
+  staves[staves.length - 1].join = null;
+  // repeats, endings, segno/coda and D.C./D.S. belong to the whole score: they go on the top stave
+  staves[0].marks.push(...score.marks);
+  if (score.final) staves.forEach(st => st.end = 'final');
+  if (score.tempo && score.first) score.first.t.stave.marks.push({ d: 'metronome', a: score.first.id, bpm: Math.round(Math.max(10, Math.min(400, score.tempo.bpm))), unit: score.tempo.unit, ...(score.tempo.dotted ? { dotted: true } : {}) });
+  const big = staves.some(st => st.items.length > 5000);
+  return { score: { staves }, notes, skipped, big };
+}
+async function openMusicXML(file, zipped) {
+  const text = zipped ? await mxlScore(await file.arrayBuffer()) : xmlText(new Uint8Array(await file.arrayBuffer()));
+  return readMusicXML(text);
+}
+
 function openScore(file) {
   if (!file) return;
-  if (file.size > 5e6) return toast('That file is too big (over 5 MB).');
+  const lower = file.name.toLowerCase(), xml = /\.(mxl|musicxml|xml)$/.test(lower);
+  if (file.size > (xml ? 30e6 : 5e6)) return toast(`That file is too big (over ${xml ? 30 : 5} MB).`);
+  if (xml) {
+    openMusicXML(file, lower.endsWith('.mxl')).then(({ score, notes, skipped, big }) => {
+      const next = cleanScore(score);
+      sel = selMark = null;
+      commit(() => state = next);
+      const extra = [skipped.grace && `${skipped.grace} grace notes left out`, big && 'very long staves cut at 5000 symbols'].filter(Boolean);
+      toast(`Opened ${file.name}: ${notes} notes on ${next.staves.length} stave${next.staves.length > 1 ? 's' : ''}${extra.length ? ' (' + extra.join(', ') + ')' : ''}.`);
+    }).catch(err => toast(`Could not open ${file.name}: ${err.message}.`));
+    return;
+  }
   // unknown extensions: JSON if it reads as JSON, otherwise Staves code
-  const fmt = Object.keys(FORMATS).find(k => file.name.toLowerCase().endsWith('.' + FORMATS[k].ext));
+  const fmt = Object.keys(FORMATS).find(k => lower.endsWith('.' + FORMATS[k].ext));
   file.text().then(text => {
     let next;
     try { next = cleanScore(fmt ? FORMATS[fmt].read(text) : (() => { try { return JSON.parse(text); } catch { return LANG.read(text); } })()); }
